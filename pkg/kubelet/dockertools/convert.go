@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,9 +20,7 @@ import (
 	"fmt"
 	"strings"
 
-	docker "github.com/fsouza/go-dockerclient"
-	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/unversioned"
+	dockertypes "github.com/docker/engine-api/types"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 )
 
@@ -34,7 +32,7 @@ const (
 )
 
 func mapState(state string) kubecontainer.ContainerState {
-	// Parse the state string in docker.APIContainers. This could break when
+	// Parse the state string in dockertypes.Container. This could break when
 	// we upgrade docker.
 	switch {
 	case strings.HasPrefix(state, statusRunningPrefix):
@@ -46,8 +44,8 @@ func mapState(state string) kubecontainer.ContainerState {
 	}
 }
 
-// Converts docker.APIContainers to kubecontainer.Container.
-func toRuntimeContainer(c *docker.APIContainers) (*kubecontainer.Container, error) {
+// Converts dockertypes.Container to kubecontainer.Container.
+func toRuntimeContainer(c *dockertypes.Container) (*kubecontainer.Container, error) {
 	if c == nil {
 		return nil, fmt.Errorf("unable to convert a nil pointer to a runtime container")
 	}
@@ -61,8 +59,8 @@ func toRuntimeContainer(c *docker.APIContainers) (*kubecontainer.Container, erro
 		ID:      kubecontainer.DockerID(c.ID).ContainerID(),
 		Name:    dockerName.ContainerName,
 		Image:   c.Image,
+		ImageID: c.ImageID,
 		Hash:    hash,
-		Created: c.Created,
 		// (random-liu) docker uses status to indicate whether a container is running or exited.
 		// However, in kubernetes we usually use state to indicate whether a container is running or exited,
 		// while use status to indicate the comprehensive status of the container. So we have different naming
@@ -71,43 +69,16 @@ func toRuntimeContainer(c *docker.APIContainers) (*kubecontainer.Container, erro
 	}, nil
 }
 
-// Converts docker.APIImages to kubecontainer.Image.
-func toRuntimeImage(image *docker.APIImages) (*kubecontainer.Image, error) {
+// Converts dockertypes.Image to kubecontainer.Image.
+func toRuntimeImage(image *dockertypes.Image) (*kubecontainer.Image, error) {
 	if image == nil {
 		return nil, fmt.Errorf("unable to convert a nil pointer to a runtime image")
 	}
 
 	return &kubecontainer.Image{
-		ID:       image.ID,
-		RepoTags: image.RepoTags,
-		Size:     image.VirtualSize,
+		ID:          image.ID,
+		RepoTags:    image.RepoTags,
+		RepoDigests: image.RepoDigests,
+		Size:        image.VirtualSize,
 	}, nil
-}
-
-// convert ContainerStatus to api.ContainerStatus.
-func containerStatusToAPIContainerStatus(containerStatus *kubecontainer.ContainerStatus) *api.ContainerStatus {
-	containerID := DockerPrefix + containerStatus.ID.ID
-	status := api.ContainerStatus{
-		Name:         containerStatus.Name,
-		RestartCount: containerStatus.RestartCount,
-		Image:        containerStatus.Image,
-		ImageID:      containerStatus.ImageID,
-		ContainerID:  containerID,
-	}
-	switch containerStatus.State {
-	case kubecontainer.ContainerStateRunning:
-		status.State.Running = &api.ContainerStateRunning{StartedAt: unversioned.NewTime(containerStatus.StartedAt)}
-	case kubecontainer.ContainerStateExited:
-		status.State.Terminated = &api.ContainerStateTerminated{
-			ExitCode:    containerStatus.ExitCode,
-			Reason:      containerStatus.Reason,
-			Message:     containerStatus.Message,
-			StartedAt:   unversioned.NewTime(containerStatus.StartedAt),
-			FinishedAt:  unversioned.NewTime(containerStatus.FinishedAt),
-			ContainerID: containerID,
-		}
-	default:
-		status.State.Waiting = &api.ContainerStateWaiting{}
-	}
-	return &status
 }

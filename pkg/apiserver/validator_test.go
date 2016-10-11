@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,9 +21,11 @@ import (
 	"fmt"
 	"testing"
 
-	"k8s.io/kubernetes/pkg/probe"
+	"net/http"
 	"net/url"
 	"time"
+
+	"k8s.io/kubernetes/pkg/probe"
 )
 
 type fakeHttpProber struct {
@@ -32,7 +34,7 @@ type fakeHttpProber struct {
 	err    error
 }
 
-func (f *fakeHttpProber) Probe(*url.URL, time.Duration) (probe.Result, string, error) {
+func (f *fakeHttpProber) Probe(*url.URL, http.Header, time.Duration) (probe.Result, string, error) {
 	return f.result, f.body, f.err
 }
 

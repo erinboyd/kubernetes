@@ -2,21 +2,26 @@
 
 <!-- BEGIN STRIP_FOR_RELEASE -->
 
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
 
 <h2>PLEASE NOTE: This document applies to the HEAD of the source tree</h2>
 
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
+
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
+<strong>
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.4/docs/devel/running-locally.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -36,6 +41,7 @@ Getting started locally
     - [Docker](#docker)
     - [etcd](#etcd)
     - [go](#go)
+    - [OpenSSL](#openssl)
 - [Clone the repository](#clone-the-repository)
 - [Starting the cluster](#starting-the-cluster)
 - [Running a container](#running-a-container)
@@ -67,6 +73,14 @@ You need an [etcd](https://github.com/coreos/etcd/releases) in your path, please
 #### go
 
 You need [go](https://golang.org/doc/install) in your path (see [here](development.md#go-versions) for supported versions), please make sure it is installed and in your ``$PATH``.
+
+#### OpenSSL
+
+You need [OpenSSL](https://www.openssl.org/) installed.  If you do not have the `openssl` command available, you may see the following error in `/tmp/kube-apiserver.log`:
+
+```
+server.go:333] Invalid Authentication Config: open /tmp/kube-serviceaccount.key: no such file or directory
+```
 
 ### Clone the repository
 
@@ -129,7 +143,7 @@ However you cannot view the nginx start page on localhost. To verify that nginx 
 You can control the specifications of a pod via a user defined manifest, and reach nginx through your browser on the port specified therein:
 
 ```sh
-cluster/kubectl.sh create -f docs/user-guide/pod.yaml
+cluster/kubectl.sh create -f test/fixtures/doc-yaml/user-guide/pod.yaml
 ```
 
 Congratulations!
@@ -156,7 +170,7 @@ You are running a single node setup.  This has the limitation of only supporting
 
 ```sh
 cd kubernetes
-hack/build-go.sh
+make
 hack/local-up-cluster.sh
 ```
 
@@ -166,9 +180,16 @@ One or more of the Kubernetes daemons might've crashed. Tail the logs of each in
 
 #### The pods fail to connect to the services by host names
 
-The local-up-cluster.sh script doesn't start a DNS service. Similar situation can be found [here](http://issue.k8s.io/6667). You can start a manually. Related documents can be found [here](../../cluster/addons/dns/#how-do-i-configure-it)
+To start the DNS service, you need to set the following variables:
 
+```sh
+KUBE_ENABLE_CLUSTER_DNS=true
+KUBE_DNS_SERVER_IP="10.0.0.10"
+KUBE_DNS_DOMAIN="cluster.local"
+KUBE_DNS_REPLICAS=1
+```
 
+To know more on DNS service you can look [here](http://issue.k8s.io/6667). Related documents can be found [here](../../build/kube-dns/#how-do-i-configure-it)
 
 
 <!-- BEGIN MUNGE: GENERATED_ANALYTICS -->

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,33 +18,35 @@ package cinder
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"testing"
+	"time"
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util/mount"
+	utiltesting "k8s.io/kubernetes/pkg/util/testing"
 	"k8s.io/kubernetes/pkg/volume"
+	volumetest "k8s.io/kubernetes/pkg/volume/testing"
 )
 
 func TestCanSupport(t *testing.T) {
-	tmpDir, err := ioutil.TempDir(os.TempDir(), "cinderTest")
+	tmpDir, err := utiltesting.MkTmpdir("cinderTest")
 	if err != nil {
 		t.Fatalf("can't make a temp dir: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
 	plugMgr := volume.VolumePluginMgr{}
-	plugMgr.InitPlugins(ProbeVolumePlugins(), volume.NewFakeVolumeHost(tmpDir, nil, nil))
+	plugMgr.InitPlugins(ProbeVolumePlugins(), volumetest.NewFakeVolumeHost(tmpDir, nil, nil, "" /* rootContext */))
 
 	plug, err := plugMgr.FindPluginByName("kubernetes.io/cinder")
 	if err != nil {
 		t.Errorf("Can't find the plugin by name")
 	}
-	if plug.Name() != "kubernetes.io/cinder" {
-		t.Errorf("Wrong name: %s", plug.Name())
+	if plug.GetPluginName() != "kubernetes.io/cinder" {
+		t.Errorf("Wrong name: %s", plug.GetPluginName())
 	}
 	if !plug.CanSupport(&volume.Spec{Volume: &api.Volume{VolumeSource: api.VolumeSource{Cinder: &api.CinderVolumeSource{}}}}) {
 		t.Errorf("Expected true")
@@ -55,20 +57,60 @@ func TestCanSupport(t *testing.T) {
 	}
 }
 
-type fakePDManager struct{}
+type fakePDManager struct {
+	// How long should AttachDisk/DetachDisk take - we need slower AttachDisk in a test.
+	attachDetachDuration time.Duration
+}
 
-func (fake *fakePDManager) AttachDisk(b *cinderVolumeBuilder, globalPDPath string) error {
+func getFakeDeviceName(host volume.VolumeHost, pdName string) string {
+	return path.Join(host.GetPluginDir(cinderVolumePluginName), "device", pdName)
+}
+
+// Real Cinder AttachDisk attaches a cinder volume. If it is not yet mounted,
+// it mounts it it to globalPDPath.
+// We create a dummy directory (="device") and bind-mount it to globalPDPath
+func (fake *fakePDManager) AttachDisk(b *cinderVolumeMounter, globalPDPath string) error {
 	globalPath := makeGlobalPDName(b.plugin.host, b.pdName)
-	err := os.MkdirAll(globalPath, 0750)
+	fakeDeviceName := getFakeDeviceName(b.plugin.host, b.pdName)
+	err := os.MkdirAll(fakeDeviceName, 0750)
 	if err != nil {
 		return err
+	}
+	// Attaching a Cinder volume can be slow...
+	time.Sleep(fake.attachDetachDuration)
+
+	// The volume is "attached", bind-mount it if it's not mounted yet.
+	notmnt, err := b.mounter.IsLikelyNotMountPoint(globalPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(globalPath, 0750); err != nil {
+				return err
+			}
+			notmnt = true
+		} else {
+			return err
+		}
+	}
+	if notmnt {
+		err = b.mounter.Mount(fakeDeviceName, globalPath, "", []string{"bind"})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (fake *fakePDManager) DetachDisk(c *cinderVolumeCleaner) error {
+func (fake *fakePDManager) DetachDisk(c *cinderVolumeUnmounter) error {
 	globalPath := makeGlobalPDName(c.plugin.host, c.pdName)
-	err := os.RemoveAll(globalPath)
+	fakeDeviceName := getFakeDeviceName(c.plugin.host, c.pdName)
+	// unmount the bind-mount - should be fast
+	err := c.mounter.Unmount(globalPath)
+	if err != nil {
+		return err
+	}
+
+	// "Detach" the fake "device"
+	err = os.RemoveAll(fakeDeviceName)
 	if err != nil {
 		return err
 	}
@@ -87,13 +129,13 @@ func (fake *fakePDManager) DeleteVolume(cd *cinderVolumeDeleter) error {
 }
 
 func TestPlugin(t *testing.T) {
-	tmpDir, err := ioutil.TempDir(os.TempDir(), "cinderTest")
+	tmpDir, err := utiltesting.MkTmpdir("cinderTest")
 	if err != nil {
 		t.Fatalf("can't make a temp dir: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
 	plugMgr := volume.VolumePluginMgr{}
-	plugMgr.InitPlugins(ProbeVolumePlugins(), volume.NewFakeVolumeHost(tmpDir, nil, nil))
+	plugMgr.InitPlugins(ProbeVolumePlugins(), volumetest.NewFakeVolumeHost(tmpDir, nil, nil, "" /* rootContext */))
 
 	plug, err := plugMgr.FindPluginByName("kubernetes.io/cinder")
 	if err != nil {
@@ -108,20 +150,20 @@ func TestPlugin(t *testing.T) {
 			},
 		},
 	}
-	builder, err := plug.(*cinderPlugin).newBuilderInternal(volume.NewSpecFromVolume(spec), types.UID("poduid"), &fakePDManager{}, &mount.FakeMounter{})
+	mounter, err := plug.(*cinderPlugin).newMounterInternal(volume.NewSpecFromVolume(spec), types.UID("poduid"), &fakePDManager{0}, &mount.FakeMounter{})
 	if err != nil {
-		t.Errorf("Failed to make a new Builder: %v", err)
+		t.Errorf("Failed to make a new Mounter: %v", err)
 	}
-	if builder == nil {
-		t.Errorf("Got a nil Builder: %v")
+	if mounter == nil {
+		t.Errorf("Got a nil Mounter")
 	}
 	volPath := path.Join(tmpDir, "pods/poduid/volumes/kubernetes.io~cinder/vol1")
-	path := builder.GetPath()
+	path := mounter.GetPath()
 	if path != volPath {
 		t.Errorf("Got unexpected path: %s", path)
 	}
 
-	if err := builder.SetUp(); err != nil {
+	if err := mounter.SetUp(nil); err != nil {
 		t.Errorf("Expected success, got: %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -139,15 +181,15 @@ func TestPlugin(t *testing.T) {
 		}
 	}
 
-	cleaner, err := plug.(*cinderPlugin).newCleanerInternal("vol1", types.UID("poduid"), &fakePDManager{}, &mount.FakeMounter{})
+	unmounter, err := plug.(*cinderPlugin).newUnmounterInternal("vol1", types.UID("poduid"), &fakePDManager{0}, &mount.FakeMounter{})
 	if err != nil {
-		t.Errorf("Failed to make a new Cleaner: %v", err)
+		t.Errorf("Failed to make a new Unmounter: %v", err)
 	}
-	if cleaner == nil {
-		t.Errorf("Got a nil Cleaner: %v")
+	if unmounter == nil {
+		t.Errorf("Got a nil Unmounter")
 	}
 
-	if err := cleaner.TearDown(); err != nil {
+	if err := unmounter.TearDown(); err != nil {
 		t.Errorf("Expected success, got: %v", err)
 	}
 	if _, err := os.Stat(path); err == nil {
@@ -165,15 +207,8 @@ func TestPlugin(t *testing.T) {
 		},
 		PersistentVolumeReclaimPolicy: api.PersistentVolumeReclaimDelete,
 	}
-	provisioner, err := plug.(*cinderPlugin).newProvisionerInternal(options, &fakePDManager{})
-	persistentSpec, err := provisioner.NewPersistentVolumeTemplate()
-	if err != nil {
-		t.Errorf("NewPersistentVolumeTemplate() failed: %v", err)
-	}
-
-	// get 2nd Provisioner - persistent volume controller will do the same
-	provisioner, err = plug.(*cinderPlugin).newProvisionerInternal(options, &fakePDManager{})
-	err = provisioner.Provision(persistentSpec)
+	provisioner, err := plug.(*cinderPlugin).newProvisionerInternal(options, &fakePDManager{0})
+	persistentSpec, err := provisioner.Provision()
 	if err != nil {
 		t.Errorf("Provision() failed: %v", err)
 	}
@@ -191,7 +226,7 @@ func TestPlugin(t *testing.T) {
 	volSpec := &volume.Spec{
 		PersistentVolume: persistentSpec,
 	}
-	deleter, err := plug.(*cinderPlugin).newDeleterInternal(volSpec, &fakePDManager{})
+	deleter, err := plug.(*cinderPlugin).newDeleterInternal(volSpec, &fakePDManager{0})
 	err = deleter.Delete()
 	if err != nil {
 		t.Errorf("Deleter() failed: %v", err)

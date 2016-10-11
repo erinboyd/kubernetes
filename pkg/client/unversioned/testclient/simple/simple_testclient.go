@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,6 +27,8 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/unversioned"
+	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	"k8s.io/kubernetes/pkg/client/restclient"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
@@ -53,39 +55,58 @@ type Response struct {
 
 type Client struct {
 	*client.Client
-	Request  Request
-	Response Response
-	Error    bool
-	Created  bool
-	server   *httptest.Server
-	handler  *utiltesting.FakeHandler
+	Clientset *clientset.Clientset
+	Request   Request
+	Response  Response
+	Error     bool
+	Created   bool
+	server    *httptest.Server
+	handler   *utiltesting.FakeHandler
 	// For query args, an optional function to validate the contents
 	// useful when the contents can change but still be correct.
 	// Maps from query arg key to validator.
 	// If no validator is present, string equality is used.
 	QueryValidator map[string]func(string, string) bool
+
+	// If your object could exist in multiple groups, set this to
+	// correspond to the URL you're testing it with.
+	ResourceGroup string
 }
 
 func (c *Client) Setup(t *testing.T) *Client {
 	c.handler = &utiltesting.FakeHandler{
 		StatusCode: c.Response.StatusCode,
 	}
-	if responseBody := body(t, c.Response.Body, c.Response.RawBody); responseBody != nil {
+	if responseBody := c.body(t, c.Response.Body, c.Response.RawBody); responseBody != nil {
 		c.handler.ResponseBody = *responseBody
 	}
 	c.server = httptest.NewServer(c.handler)
 	if c.Client == nil {
-		c.Client = client.NewOrDie(&client.Config{
-			Host:         c.server.URL,
-			GroupVersion: testapi.Default.GroupVersion(),
+		c.Client = client.NewOrDie(&restclient.Config{
+			Host:          c.server.URL,
+			ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion()},
 		})
 
 		// TODO: caesarxuchao: hacky way to specify version of Experimental client.
 		// We will fix this by supporting multiple group versions in Config
-		c.ExtensionsClient = client.NewExtensionsOrDie(&client.Config{
-			Host:         c.server.URL,
-			GroupVersion: testapi.Extensions.GroupVersion(),
+		c.AutoscalingClient = client.NewAutoscalingOrDie(&restclient.Config{
+			Host:          c.server.URL,
+			ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Autoscaling.GroupVersion()},
 		})
+		c.BatchClient = client.NewBatchOrDie(&restclient.Config{
+			Host:          c.server.URL,
+			ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Batch.GroupVersion()},
+		})
+		c.ExtensionsClient = client.NewExtensionsOrDie(&restclient.Config{
+			Host:          c.server.URL,
+			ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Extensions.GroupVersion()},
+		})
+		c.RbacClient = client.NewRbacOrDie(&restclient.Config{
+			Host:          c.server.URL,
+			ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Rbac.GroupVersion()},
+		})
+
+		c.Clientset = clientset.NewForConfigOrDie(&restclient.Config{Host: c.server.URL})
 	}
 	c.QueryValidator = map[string]func(string, string) bool{}
 	return c
@@ -93,8 +114,7 @@ func (c *Client) Setup(t *testing.T) *Client {
 
 func (c *Client) Close() {
 	if c.server != nil {
-		// TODO: Uncomment when fix #19254
-		// c.server.Close()
+		c.server.Close()
 	}
 }
 
@@ -134,7 +154,7 @@ func (c *Client) ValidateCommon(t *testing.T, err error) {
 		return
 	}
 
-	requestBody := body(t, c.Request.Body, c.Request.RawBody)
+	requestBody := c.body(t, c.Request.Body, c.Request.RawBody)
 	actualQuery := c.handler.RequestReceived.URL.Query()
 	t.Logf("got query: %v", actualQuery)
 	t.Logf("path: %v", c.Request.Path)
@@ -202,18 +222,22 @@ func validateFields(a, b string) bool {
 	return sA.String() == sB.String()
 }
 
-func body(t *testing.T, obj runtime.Object, raw *string) *string {
+func (c *Client) body(t *testing.T, obj runtime.Object, raw *string) *string {
 	if obj != nil {
-		fqKind, err := api.Scheme.ObjectKind(obj)
+		fqKinds, _, err := api.Scheme.ObjectKinds(obj)
 		if err != nil {
 			t.Errorf("unexpected encoding error: %v", err)
 		}
-		var bs []byte
-		g, found := testapi.Groups[fqKind.GroupVersion().Group]
-		if !found {
-			t.Errorf("Group %s is not registered in testapi", fqKind.GroupVersion().Group)
+		groupName := fqKinds[0].GroupVersion().Group
+		if c.ResourceGroup != "" {
+			groupName = c.ResourceGroup
 		}
-		bs, err = g.Codec().Encode(obj)
+		var bs []byte
+		g, found := testapi.Groups[groupName]
+		if !found {
+			t.Errorf("Group %s is not registered in testapi", groupName)
+		}
+		bs, err = runtime.Encode(g.Codec(), obj)
 		if err != nil {
 			t.Errorf("unexpected encoding error: %v", err)
 		}

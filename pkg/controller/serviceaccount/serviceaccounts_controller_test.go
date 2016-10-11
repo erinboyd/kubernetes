@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,7 +20,8 @@ import (
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 	"k8s.io/kubernetes/pkg/util/sets"
 )
 
@@ -149,7 +150,7 @@ func TestServiceAccountCreation(t *testing.T) {
 	}
 
 	for k, tc := range testcases {
-		client := testclient.NewSimpleFake(defaultServiceAccount, managedServiceAccount)
+		client := fake.NewSimpleClientset(defaultServiceAccount, managedServiceAccount)
 		options := DefaultServiceAccountsControllerOptions()
 		options.ServiceAccounts = []api.ServiceAccount{
 			{ObjectMeta: api.ObjectMeta{Name: defaultName}},
@@ -187,7 +188,7 @@ func TestServiceAccountCreation(t *testing.T) {
 				t.Errorf("%s: Unexpected action %s", k, action)
 				break
 			}
-			createdAccount := action.(testclient.CreateAction).GetObject().(*api.ServiceAccount)
+			createdAccount := action.(core.CreateAction).GetObject().(*api.ServiceAccount)
 			if createdAccount.Name != expectedName {
 				t.Errorf("%s: Expected %s to be created, got %s", k, expectedName, createdAccount.Name)
 			}

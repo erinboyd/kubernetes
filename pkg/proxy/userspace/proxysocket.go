@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/proxy"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/runtime"
 )
 
 // Abstraction over TCP/UDP sockets which are proxied.
@@ -87,8 +87,9 @@ func (tcp *tcpProxySocket) ListenPort() int {
 }
 
 func tryConnect(service proxy.ServicePortName, srcAddr net.Addr, protocol string, proxier *Proxier) (out net.Conn, err error) {
+	sessionAffinityReset := false
 	for _, dialTimeout := range endpointDialTimeout {
-		endpoint, err := proxier.loadBalancer.NextEndpoint(service, srcAddr)
+		endpoint, err := proxier.loadBalancer.NextEndpoint(service, srcAddr, sessionAffinityReset)
 		if err != nil {
 			glog.Errorf("Couldn't find an endpoint for %s: %v", service, err)
 			return nil, err
@@ -102,6 +103,7 @@ func tryConnect(service proxy.ServicePortName, srcAddr net.Addr, protocol string
 				panic("Dial failed: " + err.Error())
 			}
 			glog.Errorf("Dial failed: %v", err)
+			sessionAffinityReset = true
 			continue
 		}
 		return outConn, nil
@@ -259,7 +261,7 @@ func (udp *udpProxySocket) getBackendConn(activeClients *clientCache, cliAddr ne
 		}
 		activeClients.clients[cliAddr.String()] = svrConn
 		go func(cliAddr net.Addr, svrConn net.Conn, activeClients *clientCache, timeout time.Duration) {
-			defer util.HandleCrash()
+			defer runtime.HandleCrash()
 			udp.proxyClient(cliAddr, svrConn, activeClients, timeout)
 		}(cliAddr, svrConn, activeClients, timeout)
 	}

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@ type Generator struct {
 	Conditional          string
 	Clean                bool
 	OnlyIDL              bool
+	KeepGogoproto        bool
 	SkipGeneratedRewrite bool
 	DropEmbeddedFields   string
 }
@@ -53,17 +54,31 @@ func New() *Generator {
 		OutputBase:       sourceTree,
 		GoHeaderFilePath: filepath.Join(sourceTree, "k8s.io/kubernetes/hack/boilerplate/boilerplate.go.txt"),
 	}
-	defaultProtoImport := filepath.Join(sourceTree, "k8s.io", "kubernetes", "Godeps", "_workspace", "src", "github.com", "gogo", "protobuf", "protobuf")
+	defaultProtoImport := filepath.Join(sourceTree, "k8s.io", "kubernetes", "vendor", "github.com", "gogo", "protobuf", "protobuf")
 	return &Generator{
 		Common:      common,
 		OutputBase:  sourceTree,
 		ProtoImport: []string{defaultProtoImport},
-		Packages: `+k8s.io/kubernetes/pkg/util/intstr,` +
-			`+k8s.io/kubernetes/pkg/api/resource,` +
-			`+k8s.io/kubernetes/pkg/runtime,` +
-			`k8s.io/kubernetes/pkg/api/unversioned,` +
-			`k8s.io/kubernetes/pkg/api/v1,` +
+		Packages: strings.Join([]string{
+			`+k8s.io/kubernetes/pkg/util/intstr`,
+			`+k8s.io/kubernetes/pkg/api/resource`,
+			`+k8s.io/kubernetes/pkg/runtime`,
+			`+k8s.io/kubernetes/pkg/watch/versioned`,
+			`k8s.io/kubernetes/pkg/api/unversioned`,
+			`k8s.io/kubernetes/pkg/api/v1`,
+			`k8s.io/kubernetes/pkg/apis/policy/v1alpha1`,
 			`k8s.io/kubernetes/pkg/apis/extensions/v1beta1`,
+			`k8s.io/kubernetes/pkg/apis/autoscaling/v1`,
+			`k8s.io/kubernetes/pkg/apis/authorization/v1beta1`,
+			`k8s.io/kubernetes/pkg/apis/batch/v1`,
+			`k8s.io/kubernetes/pkg/apis/batch/v2alpha1`,
+			`k8s.io/kubernetes/pkg/apis/apps/v1alpha1`,
+			`k8s.io/kubernetes/pkg/apis/authentication/v1beta1`,
+			`k8s.io/kubernetes/pkg/apis/rbac/v1alpha1`,
+			`k8s.io/kubernetes/federation/apis/federation/v1beta1`,
+			`k8s.io/kubernetes/pkg/apis/certificates/v1alpha1`,
+			`k8s.io/kubernetes/pkg/apis/imagepolicy/v1alpha1`,
+		}, ","),
 		DropEmbeddedFields: "k8s.io/kubernetes/pkg/api/unversioned.TypeMeta",
 	}
 }
@@ -77,13 +92,10 @@ func (g *Generator) BindFlags(flag *flag.FlagSet) {
 	flag.StringVar(&g.Conditional, "conditional", g.Conditional, "An optional Golang build tag condition to add to the generated Go code")
 	flag.BoolVar(&g.Clean, "clean", g.Clean, "If true, remove all generated files for the specified Packages.")
 	flag.BoolVar(&g.OnlyIDL, "only-idl", g.OnlyIDL, "If true, only generate the IDL for each package.")
+	flag.BoolVar(&g.KeepGogoproto, "keep-gogoproto", g.KeepGogoproto, "If true, the generated IDL will contain gogoprotobuf extensions which are normally removed")
 	flag.BoolVar(&g.SkipGeneratedRewrite, "skip-generated-rewrite", g.SkipGeneratedRewrite, "If true, skip fixing up the generated.pb.go file (debugging only).")
 	flag.StringVar(&g.DropEmbeddedFields, "drop-embedded-fields", g.DropEmbeddedFields, "Comma-delimited list of embedded Go types to omit from generated protobufs")
 }
-
-const (
-	typesKindProtobuf = "Protobuf"
-)
 
 func Run(g *Generator) {
 	if g.Common.VerifyOnly {
@@ -124,6 +136,9 @@ func Run(g *Generator) {
 		case strings.HasPrefix(d, "-"):
 			d = d[1:]
 			outputPackage = false
+		}
+		if strings.Contains(d, "-") {
+			log.Fatalf("Package names must be valid protobuf package identifiers, which allow only [a-z0-9_]: %s", d)
 		}
 		name := protoSafePackage(d)
 		parts := strings.SplitN(d, "=", 2)
@@ -167,12 +182,12 @@ func Run(g *Generator) {
 		},
 		"public",
 	)
-	c.Verify = g.Common.VerifyOnly
-	c.FileTypes["protoidl"] = protoIDLFileType{}
-
 	if err != nil {
 		log.Fatalf("Failed making a context: %v", err)
 	}
+
+	c.Verify = g.Common.VerifyOnly
+	c.FileTypes["protoidl"] = NewProtoFile()
 
 	if err := protobufNames.AssignTypesToPackages(c); err != nil {
 		log.Fatalf("Failed to identify Common types: %v", err)
@@ -206,8 +221,11 @@ func Run(g *Generator) {
 
 	for _, outputPackage := range outputPackages {
 		p := outputPackage.(*protobufPackage)
+
 		path := filepath.Join(g.OutputBase, p.ImportPath())
 		outputPath := filepath.Join(g.OutputBase, p.OutputPath())
+
+		// generate the gogoprotobuf protoc
 		cmd := exec.Command("protoc", append(args, path)...)
 		out, err := cmd.CombinedOutput()
 		if len(out) > 0 {
@@ -217,29 +235,74 @@ func Run(g *Generator) {
 			log.Println(strings.Join(cmd.Args, " "))
 			log.Fatalf("Unable to generate protoc on %s: %v", p.PackageName, err)
 		}
-		if !g.SkipGeneratedRewrite {
-			if err := RewriteGeneratedGogoProtobufFile(outputPath, p.GoPackageName(), p.HasGoType, buf.Bytes()); err != nil {
-				log.Fatalf("Unable to rewrite generated %s: %v", outputPath, err)
-			}
 
-			cmd := exec.Command("goimports", "-w", outputPath)
-			out, err := cmd.CombinedOutput()
-			if len(out) > 0 {
-				log.Printf(string(out))
-			}
-			if err != nil {
-				log.Println(strings.Join(cmd.Args, " "))
-				log.Fatalf("Unable to rewrite imports for %s: %v", p.PackageName, err)
-			}
+		if g.SkipGeneratedRewrite {
+			continue
+		}
 
-			cmd = exec.Command("gofmt", "-s", "-w", outputPath)
-			out, err = cmd.CombinedOutput()
-			if len(out) > 0 {
-				log.Printf(string(out))
+		// alter the generated protobuf file to remove the generated types (but leave the serializers) and rewrite the
+		// package statement to match the desired package name
+		if err := RewriteGeneratedGogoProtobufFile(outputPath, p.ExtractGeneratedType, p.OptionalTypeName, buf.Bytes()); err != nil {
+			log.Fatalf("Unable to rewrite generated %s: %v", outputPath, err)
+		}
+
+		// sort imports
+		cmd = exec.Command("goimports", "-w", outputPath)
+		out, err = cmd.CombinedOutput()
+		if len(out) > 0 {
+			log.Printf(string(out))
+		}
+		if err != nil {
+			log.Println(strings.Join(cmd.Args, " "))
+			log.Fatalf("Unable to rewrite imports for %s: %v", p.PackageName, err)
+		}
+
+		// format and simplify the generated file
+		cmd = exec.Command("gofmt", "-s", "-w", outputPath)
+		out, err = cmd.CombinedOutput()
+		if len(out) > 0 {
+			log.Printf(string(out))
+		}
+		if err != nil {
+			log.Println(strings.Join(cmd.Args, " "))
+			log.Fatalf("Unable to apply gofmt for %s: %v", p.PackageName, err)
+		}
+	}
+
+	if g.SkipGeneratedRewrite {
+		return
+	}
+
+	if !g.KeepGogoproto {
+		// generate, but do so without gogoprotobuf extensions
+		for _, outputPackage := range outputPackages {
+			p := outputPackage.(*protobufPackage)
+			p.OmitGogo = true
+		}
+		if err := c.ExecutePackages(g.OutputBase, outputPackages); err != nil {
+			log.Fatalf("Failed executing generator: %v", err)
+		}
+	}
+
+	for _, outputPackage := range outputPackages {
+		p := outputPackage.(*protobufPackage)
+
+		if len(p.StructTags) == 0 {
+			continue
+		}
+
+		pattern := filepath.Join(g.OutputBase, p.PackagePath, "*.go")
+		files, err := filepath.Glob(pattern)
+		if err != nil {
+			log.Fatalf("Can't glob pattern %q: %v", pattern, err)
+		}
+
+		for _, s := range files {
+			if strings.HasSuffix(s, "_test.go") {
+				continue
 			}
-			if err != nil {
-				log.Println(strings.Join(cmd.Args, " "))
-				log.Fatalf("Unable to rewrite imports for %s: %v", p.PackageName, err)
+			if err := RewriteTypesWithProtobufStructTags(s, p.StructTags); err != nil {
+				log.Fatalf("Unable to rewrite with struct tags %s: %v", s, err)
 			}
 		}
 	}

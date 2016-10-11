@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -116,6 +116,32 @@ func TestFIFO_addUpdate(t *testing.T) {
 	_, exists, _ := f.GetByKey("foo")
 	if exists {
 		t.Errorf("item did not get removed")
+	}
+}
+
+func TestFIFO_addDeleteAdd(t *testing.T) {
+	f := NewHistorical(nil)
+	testobj := &testObj{"foo", 10}
+	f.Add(testobj)
+	f.Delete(testobj)
+	f.Add(testobj)
+
+	_, exists, _ := f.GetByKey("foo")
+	if !exists {
+		t.Errorf("item did not get readded")
+	}
+}
+
+func TestFIFO_addPopAdd(t *testing.T) {
+	f := NewHistorical(nil)
+	testobj := &testObj{"foo", 10}
+	f.Add(testobj)
+	f.Pop(nil)
+	f.Add(testobj)
+
+	_, exists, _ := f.GetByKey("foo")
+	if !exists {
+		t.Errorf("item did not get readded")
 	}
 }
 

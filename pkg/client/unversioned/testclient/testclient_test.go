@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,8 +26,8 @@ import (
 )
 
 func TestNewClient(t *testing.T) {
-	o := NewObjects(api.Scheme, api.Scheme)
-	if err := AddObjectsFromPath("../../../../examples/guestbook/frontend-service.yaml", o, api.Scheme); err != nil {
+	o := NewObjects(api.Scheme, api.Codecs.UniversalDecoder())
+	if err := AddObjectsFromPath("../../../../examples/guestbook/frontend-service.yaml", o, api.Codecs.UniversalDecoder()); err != nil {
 		t.Fatal(err)
 	}
 	client := &Fake{}
@@ -52,13 +52,13 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestErrors(t *testing.T) {
-	o := NewObjects(api.Scheme, api.Scheme)
+	o := NewObjects(api.Scheme, api.Codecs.UniversalDecoder())
 	o.Add(&api.List{
 		Items: []runtime.Object{
 			// This first call to List will return this error
-			&(errors.NewNotFound(api.Resource("ServiceList"), "").(*errors.StatusError).ErrStatus),
+			&(errors.NewNotFound(api.Resource("ServiceList"), "").ErrStatus),
 			// The second call to List will return this error
-			&(errors.NewForbidden(api.Resource("ServiceList"), "", nil).(*errors.StatusError).ErrStatus),
+			&(errors.NewForbidden(api.Resource("ServiceList"), "", nil).ErrStatus),
 		},
 	})
 	client := &Fake{}

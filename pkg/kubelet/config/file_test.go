@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -29,7 +29,8 @@ import (
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/securitycontext"
-	"k8s.io/kubernetes/pkg/util"
+	utiltesting "k8s.io/kubernetes/pkg/util/testing"
+	"k8s.io/kubernetes/pkg/util/wait"
 )
 
 func TestExtractFromNonExistentFile(t *testing.T) {
@@ -52,7 +53,7 @@ func TestUpdateOnNonExistentFile(t *testing.T) {
 			t.Fatalf("Expected %#v, Got %#v", expected, update)
 		}
 
-	case <-time.After(util.ForeverTestTimeout):
+	case <-time.After(wait.ForeverTestTimeout):
 		t.Errorf("Expected update, timeout instead")
 	}
 }
@@ -128,11 +129,11 @@ func TestReadPodsFromFile(t *testing.T) {
 	for _, testCase := range testCases {
 		func() {
 			var versionedPod runtime.Object
-			err := testapi.Default.Converter().Convert(&testCase.pod, &versionedPod)
+			err := testapi.Default.Converter().Convert(&testCase.pod, &versionedPod, nil)
 			if err != nil {
 				t.Fatalf("%s: error in versioning the pod: %v", testCase.desc, err)
 			}
-			fileContents, err := testapi.Default.Codec().Encode(versionedPod)
+			fileContents, err := runtime.Encode(testapi.Default.Codec(), versionedPod)
 			if err != nil {
 				t.Fatalf("%s: error in encoding the pod: %v", testCase.desc, err)
 			}
@@ -153,7 +154,7 @@ func TestReadPodsFromFile(t *testing.T) {
 				if !api.Semantic.DeepEqual(testCase.expected, update) {
 					t.Errorf("%s: Expected %#v, Got %#v", testCase.desc, testCase.expected, update)
 				}
-			case <-time.After(util.ForeverTestTimeout):
+			case <-time.After(wait.ForeverTestTimeout):
 				t.Errorf("%s: Expected update, timeout instead", testCase.desc)
 			}
 		}()
@@ -174,7 +175,7 @@ func TestExtractFromBadDataFile(t *testing.T) {
 }
 
 func TestExtractFromEmptyDir(t *testing.T) {
-	dirName, err := ioutil.TempDir("", "foo")
+	dirName, err := utiltesting.MkTmpdir("file-test")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}

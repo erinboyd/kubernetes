@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,8 +18,6 @@ package meta
 
 import (
 	"errors"
-	"io"
-	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,45 +26,13 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 )
 
-type fakeCodec struct{}
-
-var _ runtime.Decoder = fakeCodec{}
-
-func (fakeCodec) Encode(runtime.Object) ([]byte, error) {
-	return []byte{}, nil
-}
-
-func (fakeCodec) EncodeToStream(runtime.Object, io.Writer) error {
-	return nil
-}
-
-func (fakeCodec) Decode([]byte) (runtime.Object, error) {
-	return nil, nil
-}
-
-func (fakeCodec) DecodeToVersion([]byte, unversioned.GroupVersion) (runtime.Object, error) {
-	return nil, nil
-}
-
-func (fakeCodec) DecodeInto([]byte, runtime.Object) error {
-	return nil
-}
-
-func (fakeCodec) DecodeIntoWithSpecifiedVersionKind([]byte, runtime.Object, unversioned.GroupVersionKind) error {
-	return nil
-}
-
-func (fakeCodec) DecodeParametersInto(parameters url.Values, obj runtime.Object) error {
-	return nil
-}
-
 type fakeConvertor struct{}
 
-func (fakeConvertor) Convert(in, out interface{}) error {
+func (fakeConvertor) Convert(in, out, context interface{}) error {
 	return nil
 }
 
-func (fakeConvertor) ConvertToVersion(in runtime.Object, _ string) (runtime.Object, error) {
+func (fakeConvertor) ConvertToVersion(in runtime.Object, _ runtime.GroupVersioner) (runtime.Object, error) {
 	return in, nil
 }
 
@@ -74,12 +40,11 @@ func (fakeConvertor) ConvertFieldLabel(version, kind, label, value string) (stri
 	return label, value, nil
 }
 
-var validCodec = fakeCodec{}
 var validAccessor = resourceAccessor{}
 var validConvertor = fakeConvertor{}
 
 func fakeInterfaces(version unversioned.GroupVersion) (*VersionInterfaces, error) {
-	return &VersionInterfaces{Codec: validCodec, ObjectConvertor: validConvertor, MetadataAccessor: validAccessor}, nil
+	return &VersionInterfaces{ObjectConvertor: validConvertor, MetadataAccessor: validAccessor}, nil
 }
 
 var unmatchedErr = errors.New("no version")
@@ -97,7 +62,6 @@ func TestRESTMapperVersionAndKindForResource(t *testing.T) {
 		Resource               unversioned.GroupVersionResource
 		GroupVersionToRegister unversioned.GroupVersion
 		ExpectedGVK            unversioned.GroupVersionKind
-		MixedCase              bool
 		Err                    bool
 	}{
 		{Resource: unversioned.GroupVersionResource{Resource: "internalobjec"}, Err: true},
@@ -105,17 +69,11 @@ func TestRESTMapperVersionAndKindForResource(t *testing.T) {
 
 		{Resource: unversioned.GroupVersionResource{Resource: "internalobject"}, ExpectedGVK: testGroupVersion.WithKind("InternalObject")},
 		{Resource: unversioned.GroupVersionResource{Resource: "internalobjects"}, ExpectedGVK: testGroupVersion.WithKind("InternalObject")},
-
-		{Resource: unversioned.GroupVersionResource{Resource: "internalobject"}, MixedCase: true, ExpectedGVK: testGroupVersion.WithKind("InternalObject")},
-		{Resource: unversioned.GroupVersionResource{Resource: "internalobjects"}, MixedCase: true, ExpectedGVK: testGroupVersion.WithKind("InternalObject")},
-
-		{Resource: unversioned.GroupVersionResource{Resource: "internalObject"}, MixedCase: true, ExpectedGVK: testGroupVersion.WithKind("InternalObject")},
-		{Resource: unversioned.GroupVersionResource{Resource: "internalObjects"}, MixedCase: true, ExpectedGVK: testGroupVersion.WithKind("InternalObject")},
 	}
 	for i, testCase := range testCases {
 		mapper := NewDefaultRESTMapper([]unversioned.GroupVersion{testGroupVersion}, fakeInterfaces)
 		if len(testCase.ExpectedGVK.Kind) != 0 {
-			mapper.Add(testCase.ExpectedGVK, RESTScopeNamespace, testCase.MixedCase)
+			mapper.Add(testCase.ExpectedGVK, RESTScopeNamespace)
 		}
 		actualGVK, err := mapper.KindFor(testCase.Resource)
 
@@ -147,7 +105,7 @@ func TestRESTMapperGroupForResource(t *testing.T) {
 	}
 	for i, testCase := range testCases {
 		mapper := NewDefaultRESTMapper([]unversioned.GroupVersion{testCase.GroupVersionKind.GroupVersion()}, fakeInterfaces)
-		mapper.Add(testCase.GroupVersionKind, RESTScopeNamespace, false)
+		mapper.Add(testCase.GroupVersionKind, RESTScopeNamespace)
 
 		actualGVK, err := mapper.KindFor(testCase.Resource)
 		if testCase.Err {
@@ -190,7 +148,7 @@ func TestRESTMapperKindsFor(t *testing.T) {
 				{Group: "second-group", Version: "first-version", Kind: "my-kind"},
 				{Group: "first-group", Version: "first-version", Kind: "my-kind"},
 			},
-			ExpectedKindErr: "is ambiguous",
+			ExpectedKindErr: " matches multiple kinds ",
 		},
 
 		{
@@ -230,14 +188,14 @@ func TestRESTMapperKindsFor(t *testing.T) {
 				{Group: "first-group", Version: "first-version", Kind: "my-kind"},
 				{Group: "second-group", Version: "first-version", Kind: "my-kind"},
 			},
-			ExpectedKindErr: "is ambiguous",
+			ExpectedKindErr: " matches multiple kinds ",
 		},
 	}
 	for _, testCase := range testCases {
 		tcName := testCase.Name
 		mapper := NewDefaultRESTMapper(testCase.PreferredOrder, fakeInterfaces)
 		for _, kind := range testCase.KindsToRegister {
-			mapper.Add(kind, RESTScopeNamespace, false)
+			mapper.Add(kind, RESTScopeNamespace)
 		}
 
 		actualKinds, err := mapper.KindsFor(testCase.PartialResourceToRequest)
@@ -276,10 +234,11 @@ func TestRESTMapperKindsFor(t *testing.T) {
 
 func TestRESTMapperResourcesFor(t *testing.T) {
 	testCases := []struct {
-		Name                     string
-		PreferredOrder           []unversioned.GroupVersion
-		KindsToRegister          []unversioned.GroupVersionKind
-		PartialResourceToRequest unversioned.GroupVersionResource
+		Name                             string
+		PreferredOrder                   []unversioned.GroupVersion
+		KindsToRegister                  []unversioned.GroupVersionKind
+		PluralPartialResourceToRequest   unversioned.GroupVersionResource
+		SingularPartialResourceToRequest unversioned.GroupVersionResource
 
 		ExpectedResources   []unversioned.GroupVersionResource
 		ExpectedResourceErr string
@@ -296,13 +255,14 @@ func TestRESTMapperResourcesFor(t *testing.T) {
 				{Group: "second-group", Version: "first-version", Kind: "my-kind"},
 				{Group: "second-group", Version: "first-version", Kind: "your-kind"},
 			},
-			PartialResourceToRequest: unversioned.GroupVersionResource{Resource: "my-kinds"},
+			PluralPartialResourceToRequest:   unversioned.GroupVersionResource{Resource: "my-kinds"},
+			SingularPartialResourceToRequest: unversioned.GroupVersionResource{Resource: "my-kind"},
 
 			ExpectedResources: []unversioned.GroupVersionResource{
 				{Group: "second-group", Version: "first-version", Resource: "my-kinds"},
 				{Group: "first-group", Version: "first-version", Resource: "my-kinds"},
 			},
-			ExpectedResourceErr: "is ambiguous",
+			ExpectedResourceErr: " matches multiple resources ",
 		},
 
 		{
@@ -317,7 +277,8 @@ func TestRESTMapperResourcesFor(t *testing.T) {
 				{Group: "second-group", Version: "first-version", Kind: "my-kind"},
 				{Group: "second-group", Version: "first-version", Kind: "your-kind"},
 			},
-			PartialResourceToRequest: unversioned.GroupVersionResource{Group: "first-group", Resource: "my-kinds"},
+			PluralPartialResourceToRequest:   unversioned.GroupVersionResource{Group: "first-group", Resource: "my-kinds"},
+			SingularPartialResourceToRequest: unversioned.GroupVersionResource{Group: "first-group", Resource: "my-kind"},
 
 			ExpectedResources: []unversioned.GroupVersionResource{
 				{Group: "first-group", Version: "first-version", Resource: "my-kinds"},
@@ -336,52 +297,56 @@ func TestRESTMapperResourcesFor(t *testing.T) {
 				{Group: "second-group", Version: "first-version", Kind: "my-kind"},
 				{Group: "second-group", Version: "first-version", Kind: "your-kind"},
 			},
-			PartialResourceToRequest: unversioned.GroupVersionResource{Version: "first-version", Resource: "my-kinds"},
+			PluralPartialResourceToRequest:   unversioned.GroupVersionResource{Version: "first-version", Resource: "my-kinds"},
+			SingularPartialResourceToRequest: unversioned.GroupVersionResource{Version: "first-version", Resource: "my-kind"},
 
 			ExpectedResources: []unversioned.GroupVersionResource{
 				{Group: "first-group", Version: "first-version", Resource: "my-kinds"},
 				{Group: "second-group", Version: "first-version", Resource: "my-kinds"},
 			},
-			ExpectedResourceErr: "is ambiguous",
+			ExpectedResourceErr: " matches multiple resources ",
 		},
 	}
 	for _, testCase := range testCases {
 		tcName := testCase.Name
-		mapper := NewDefaultRESTMapper(testCase.PreferredOrder, fakeInterfaces)
-		for _, kind := range testCase.KindsToRegister {
-			mapper.Add(kind, RESTScopeNamespace, false)
-		}
 
-		actualResources, err := mapper.ResourcesFor(testCase.PartialResourceToRequest)
-		if err != nil {
-			t.Errorf("%s: unexpected error: %v", tcName, err)
-			continue
-		}
-		if !reflect.DeepEqual(testCase.ExpectedResources, actualResources) {
-			t.Errorf("%s: expected %v, got %v", tcName, testCase.ExpectedResources, actualResources)
-		}
+		for _, partialResource := range []unversioned.GroupVersionResource{testCase.PluralPartialResourceToRequest, testCase.SingularPartialResourceToRequest} {
+			mapper := NewDefaultRESTMapper(testCase.PreferredOrder, fakeInterfaces)
+			for _, kind := range testCase.KindsToRegister {
+				mapper.Add(kind, RESTScopeNamespace)
+			}
 
-		singleResource, err := mapper.ResourceFor(testCase.PartialResourceToRequest)
-		if err == nil && len(testCase.ExpectedResourceErr) != 0 {
-			t.Errorf("%s: expected error: %v", tcName, testCase.ExpectedResourceErr)
-			continue
-		}
-		if err != nil {
-			if len(testCase.ExpectedResourceErr) == 0 {
+			actualResources, err := mapper.ResourcesFor(partialResource)
+			if err != nil {
 				t.Errorf("%s: unexpected error: %v", tcName, err)
 				continue
-			} else {
-				if !strings.Contains(err.Error(), testCase.ExpectedResourceErr) {
-					t.Errorf("%s: expected %v, got %v", tcName, testCase.ExpectedResourceErr, err)
+			}
+			if !reflect.DeepEqual(testCase.ExpectedResources, actualResources) {
+				t.Errorf("%s: expected %v, got %v", tcName, testCase.ExpectedResources, actualResources)
+			}
+
+			singleResource, err := mapper.ResourceFor(partialResource)
+			if err == nil && len(testCase.ExpectedResourceErr) != 0 {
+				t.Errorf("%s: expected error: %v", tcName, testCase.ExpectedResourceErr)
+				continue
+			}
+			if err != nil {
+				if len(testCase.ExpectedResourceErr) == 0 {
+					t.Errorf("%s: unexpected error: %v", tcName, err)
 					continue
+				} else {
+					if !strings.Contains(err.Error(), testCase.ExpectedResourceErr) {
+						t.Errorf("%s: expected %v, got %v", tcName, testCase.ExpectedResourceErr, err)
+						continue
+					}
 				}
-			}
 
-		} else {
-			if testCase.ExpectedResources[0] != singleResource {
-				t.Errorf("%s: expected %v, got %v", tcName, testCase.ExpectedResources[0], singleResource)
-			}
+			} else {
+				if testCase.ExpectedResources[0] != singleResource {
+					t.Errorf("%s: expected %v, got %v", tcName, testCase.ExpectedResources[0], singleResource)
+				}
 
+			}
 		}
 	}
 }
@@ -389,28 +354,23 @@ func TestRESTMapperResourcesFor(t *testing.T) {
 func TestKindToResource(t *testing.T) {
 	testCases := []struct {
 		Kind             string
-		MixedCase        bool
 		Plural, Singular string
 	}{
-		{Kind: "Pod", MixedCase: true, Plural: "pods", Singular: "pod"},
-		{Kind: "Pod", MixedCase: true, Plural: "pods", Singular: "pod"},
-		{Kind: "Pod", MixedCase: false, Plural: "pods", Singular: "pod"},
+		{Kind: "Pod", Plural: "pods", Singular: "pod"},
 
-		{Kind: "ReplicationController", MixedCase: true, Plural: "replicationControllers", Singular: "replicationController"},
-		{Kind: "ReplicationController", MixedCase: true, Plural: "replicationControllers", Singular: "replicationController"},
-		{Kind: "ReplicationController", MixedCase: false, Plural: "replicationcontrollers", Singular: "replicationcontroller"},
+		{Kind: "ReplicationController", Plural: "replicationcontrollers", Singular: "replicationcontroller"},
 
 		// Add "ies" when ending with "y"
-		{Kind: "ImageRepository", MixedCase: true, Plural: "imageRepositories", Singular: "imageRepository"},
+		{Kind: "ImageRepository", Plural: "imagerepositories", Singular: "imagerepository"},
 		// Add "es" when ending with "s"
-		{Kind: "miss", MixedCase: false, Plural: "misses", Singular: "miss"},
+		{Kind: "miss", Plural: "misses", Singular: "miss"},
 		// Add "s" otherwise
-		{Kind: "lowercase", MixedCase: false, Plural: "lowercases", Singular: "lowercase"},
+		{Kind: "lowercase", Plural: "lowercases", Singular: "lowercase"},
 	}
 	for i, testCase := range testCases {
 		version := unversioned.GroupVersion{}
 
-		plural, singular := KindToResource(version.WithKind(testCase.Kind), testCase.MixedCase)
+		plural, singular := KindToResource(version.WithKind(testCase.Kind))
 		if singular != version.WithResource(testCase.Singular) || plural != version.WithResource(testCase.Plural) {
 			t.Errorf("%d: unexpected plural and singular: %v %v", i, plural, singular)
 		}
@@ -421,32 +381,24 @@ func TestRESTMapperResourceSingularizer(t *testing.T) {
 	testGroupVersion := unversioned.GroupVersion{Group: "tgroup", Version: "test"}
 
 	testCases := []struct {
-		Kind      string
-		MixedCase bool
-		Plural    string
-		Singular  string
+		Kind     string
+		Plural   string
+		Singular string
 	}{
-		{Kind: "Pod", MixedCase: true, Plural: "pods", Singular: "pod"},
-		{Kind: "Pod", MixedCase: false, Plural: "pods", Singular: "pod"},
+		{Kind: "Pod", Plural: "pods", Singular: "pod"},
+		{Kind: "ReplicationController", Plural: "replicationcontrollers", Singular: "replicationcontroller"},
+		{Kind: "ImageRepository", Plural: "imagerepositories", Singular: "imagerepository"},
+		{Kind: "Status", Plural: "statuses", Singular: "status"},
 
-		{Kind: "ReplicationController", MixedCase: true, Plural: "replicationControllers", Singular: "replicationController"},
-		{Kind: "ReplicationController", MixedCase: false, Plural: "replicationcontrollers", Singular: "replicationcontroller"},
-
-		{Kind: "ImageRepository", MixedCase: true, Plural: "imageRepositories", Singular: "imageRepository"},
-		{Kind: "ImageRepository", MixedCase: false, Plural: "imagerepositories", Singular: "imagerepository"},
-
-		{Kind: "Status", MixedCase: true, Plural: "statuses", Singular: "status"},
-		{Kind: "Status", MixedCase: false, Plural: "statuses", Singular: "status"},
-
-		{Kind: "lowercase", MixedCase: false, Plural: "lowercases", Singular: "lowercase"},
+		{Kind: "lowercase", Plural: "lowercases", Singular: "lowercase"},
 		// TODO this test is broken.  This updates to reflect actual behavior.  Kinds are expected to be singular
 		// old (incorrect), coment: Don't add extra s if the original object is already plural
-		{Kind: "lowercases", MixedCase: false, Plural: "lowercaseses", Singular: "lowercases"},
+		{Kind: "lowercases", Plural: "lowercaseses", Singular: "lowercases"},
 	}
 	for i, testCase := range testCases {
 		mapper := NewDefaultRESTMapper([]unversioned.GroupVersion{testGroupVersion}, fakeInterfaces)
 		// create singular/plural mapping
-		mapper.Add(testGroupVersion.WithKind(testCase.Kind), RESTScopeNamespace, testCase.MixedCase)
+		mapper.Add(testGroupVersion.WithKind(testCase.Kind), RESTScopeNamespace)
 
 		singular, err := mapper.ResourceSingularizer(testCase.Plural)
 		if err != nil {
@@ -466,7 +418,6 @@ func TestRESTMapperRESTMapping(t *testing.T) {
 	testCases := []struct {
 		Kind             string
 		APIGroupVersions []unversioned.GroupVersion
-		MixedCase        bool
 		DefaultVersions  []unversioned.GroupVersion
 
 		Resource             string
@@ -486,13 +437,12 @@ func TestRESTMapperRESTMapping(t *testing.T) {
 		{DefaultVersions: []unversioned.GroupVersion{testGroupVersion}, Kind: "InternalObject", APIGroupVersions: []unversioned.GroupVersion{}, Resource: "internalobjects", ExpectedGroupVersion: &unversioned.GroupVersion{Group: testGroup, Version: "test"}},
 
 		{DefaultVersions: []unversioned.GroupVersion{testGroupVersion}, Kind: "InternalObject", APIGroupVersions: []unversioned.GroupVersion{{Group: testGroup, Version: "test"}}, Resource: "internalobjects"},
-		{DefaultVersions: []unversioned.GroupVersion{testGroupVersion}, Kind: "InternalObject", APIGroupVersions: []unversioned.GroupVersion{{Group: testGroup, Version: "test"}}, MixedCase: true, Resource: "internalObjects"},
 
 		// TODO: add test for a resource that exists in one version but not another
 	}
 	for i, testCase := range testCases {
 		mapper := NewDefaultRESTMapper(testCase.DefaultVersions, fakeInterfaces)
-		mapper.Add(internalGroupVersion.WithKind("InternalObject"), RESTScopeNamespace, testCase.MixedCase)
+		mapper.Add(internalGroupVersion.WithKind("InternalObject"), RESTScopeNamespace)
 
 		preferredVersions := []string{}
 		for _, gv := range testCase.APIGroupVersions {
@@ -512,7 +462,7 @@ func TestRESTMapperRESTMapping(t *testing.T) {
 			t.Errorf("%d: unexpected resource: %#v", i, mapping)
 		}
 
-		if mapping.Codec == nil || mapping.MetadataAccessor == nil || mapping.ObjectConvertor == nil {
+		if mapping.MetadataAccessor == nil || mapping.ObjectConvertor == nil {
 			t.Errorf("%d: missing codec and accessor: %#v", i, mapping)
 		}
 
@@ -535,8 +485,8 @@ func TestRESTMapperRESTMappingSelectsVersion(t *testing.T) {
 	otherObjectGK := unversioned.GroupKind{Group: "tgroup", Kind: "OtherObject"}
 
 	mapper := NewDefaultRESTMapper([]unversioned.GroupVersion{expectedGroupVersion1, expectedGroupVersion2}, fakeInterfaces)
-	mapper.Add(expectedGroupVersion1.WithKind("InternalObject"), RESTScopeNamespace, false)
-	mapper.Add(expectedGroupVersion2.WithKind("OtherObject"), RESTScopeNamespace, false)
+	mapper.Add(expectedGroupVersion1.WithKind("InternalObject"), RESTScopeNamespace)
+	mapper.Add(expectedGroupVersion2.WithKind("OtherObject"), RESTScopeNamespace)
 
 	// pick default matching object kind based on search order
 	mapping, err := mapper.RESTMapping(otherObjectGK)
@@ -592,7 +542,7 @@ func TestRESTMapperReportsErrorOnBadVersion(t *testing.T) {
 	internalObjectGK := unversioned.GroupKind{Group: "tgroup", Kind: "InternalObject"}
 
 	mapper := NewDefaultRESTMapper([]unversioned.GroupVersion{expectedGroupVersion1, expectedGroupVersion2}, unmatchedVersionInterfaces)
-	mapper.Add(expectedGroupVersion1.WithKind("InternalObject"), RESTScopeNamespace, false)
+	mapper.Add(expectedGroupVersion1.WithKind("InternalObject"), RESTScopeNamespace)
 	_, err := mapper.RESTMapping(internalObjectGK, expectedGroupVersion1.Version)
 	if err == nil {
 		t.Errorf("unexpected non-error")

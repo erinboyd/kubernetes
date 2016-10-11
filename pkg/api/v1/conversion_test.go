@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,12 +17,104 @@ limitations under the License.
 package v1_test
 
 import (
+	"net/url"
+	"reflect"
 	"testing"
+	"time"
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/resource"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	versioned "k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/util/diff"
 )
+
+func TestPodLogOptions(t *testing.T) {
+	sinceSeconds := int64(1)
+	sinceTime := unversioned.NewTime(time.Date(2000, 1, 1, 12, 34, 56, 0, time.UTC).Local())
+	tailLines := int64(2)
+	limitBytes := int64(3)
+
+	versionedLogOptions := &versioned.PodLogOptions{
+		Container:    "mycontainer",
+		Follow:       true,
+		Previous:     true,
+		SinceSeconds: &sinceSeconds,
+		SinceTime:    &sinceTime,
+		Timestamps:   true,
+		TailLines:    &tailLines,
+		LimitBytes:   &limitBytes,
+	}
+	unversionedLogOptions := &api.PodLogOptions{
+		Container:    "mycontainer",
+		Follow:       true,
+		Previous:     true,
+		SinceSeconds: &sinceSeconds,
+		SinceTime:    &sinceTime,
+		Timestamps:   true,
+		TailLines:    &tailLines,
+		LimitBytes:   &limitBytes,
+	}
+	expectedParameters := url.Values{
+		"container":    {"mycontainer"},
+		"follow":       {"true"},
+		"previous":     {"true"},
+		"sinceSeconds": {"1"},
+		"sinceTime":    {"2000-01-01T12:34:56Z"},
+		"timestamps":   {"true"},
+		"tailLines":    {"2"},
+		"limitBytes":   {"3"},
+	}
+
+	codec := runtime.NewParameterCodec(api.Scheme)
+
+	// unversioned -> query params
+	{
+		actualParameters, err := codec.EncodeParameters(unversionedLogOptions, versioned.SchemeGroupVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(actualParameters, expectedParameters) {
+			t.Fatalf("Expected\n%#v\ngot\n%#v", expectedParameters, actualParameters)
+		}
+	}
+
+	// versioned -> query params
+	{
+		actualParameters, err := codec.EncodeParameters(versionedLogOptions, versioned.SchemeGroupVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(actualParameters, expectedParameters) {
+			t.Fatalf("Expected\n%#v\ngot\n%#v", expectedParameters, actualParameters)
+		}
+	}
+
+	// query params -> versioned
+	{
+		convertedLogOptions := &versioned.PodLogOptions{}
+		err := codec.DecodeParameters(expectedParameters, versioned.SchemeGroupVersion, convertedLogOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(convertedLogOptions, versionedLogOptions) {
+			t.Fatalf("Unexpected deserialization:\n%s", diff.ObjectGoPrintSideBySide(versionedLogOptions, convertedLogOptions))
+		}
+	}
+
+	// query params -> unversioned
+	{
+		convertedLogOptions := &api.PodLogOptions{}
+		err := codec.DecodeParameters(expectedParameters, versioned.SchemeGroupVersion, convertedLogOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(convertedLogOptions, unversionedLogOptions) {
+			t.Fatalf("Unexpected deserialization:\n%s", diff.ObjectGoPrintSideBySide(unversionedLogOptions, convertedLogOptions))
+		}
+	}
+}
 
 // TestPodSpecConversion tests that ServiceAccount is an alias for
 // ServiceAccountName.
@@ -35,7 +127,7 @@ func TestPodSpecConversion(t *testing.T) {
 		ServiceAccountName: name,
 	}
 	v := versioned.PodSpec{}
-	if err := api.Scheme.Convert(i, &v); err != nil {
+	if err := api.Scheme.Convert(i, &v, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if v.ServiceAccountName != name {
@@ -60,7 +152,7 @@ func TestPodSpecConversion(t *testing.T) {
 	}
 	for k, v := range testCases {
 		got := api.PodSpec{}
-		err := api.Scheme.Convert(v, &got)
+		err := api.Scheme.Convert(v, &got, nil)
 		if err != nil {
 			t.Fatalf("unexpected error for case %d: %v", k, err)
 		}
@@ -112,9 +204,9 @@ func TestResourceListConversion(t *testing.T) {
 		},
 	}
 
-	output := api.ResourceList{}
 	for i, test := range tests {
-		err := api.Scheme.Convert(&test.input, &output)
+		output := api.ResourceList{}
+		err := api.Scheme.Convert(&test.input, &output, nil)
 		if err != nil {
 			t.Fatalf("unexpected error for case %d: %v", i, err)
 		}

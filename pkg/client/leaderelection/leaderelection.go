@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ limitations under the License.
 // availability.
 //
 // Larger clusters often have a more lenient SLA for API latency. This should be
-// taken into account when configuring the client. The rate of leader transistions
+// taken into account when configuring the client. The rate of leader transitions
 // should be monitored and RetryPeriod and LeaseDuration should be increased
 // until the rate is stable and acceptably low. It's important to keep in mind
 // when configuring this client that the tolerance to API latency varies inversely
@@ -60,7 +60,7 @@ import (
 	"k8s.io/kubernetes/pkg/apis/componentconfig"
 	"k8s.io/kubernetes/pkg/client/record"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/runtime"
 	"k8s.io/kubernetes/pkg/util/wait"
 
 	"github.com/golang/glog"
@@ -149,7 +149,7 @@ type LeaderElector struct {
 	observedRecord LeaderElectionRecord
 	observedTime   time.Time
 	// used to implement OnNewLeader(), may lag slightly from the
-	// value observedRecord.HolderIdentity if the transistion has
+	// value observedRecord.HolderIdentity if the transition has
 	// not yet been reported.
 	reportedLeader string
 }
@@ -169,7 +169,7 @@ type LeaderElectionRecord struct {
 // Run starts the leader election loop
 func (le *LeaderElector) Run() {
 	defer func() {
-		util.HandleCrash()
+		runtime.HandleCrash()
 		le.config.Callbacks.OnStoppedLeading()
 	}()
 	le.acquire()
@@ -203,24 +203,23 @@ func (le *LeaderElector) IsLeader() bool {
 // acquire loops calling tryAcquireOrRenew and returns immediately when tryAcquireOrRenew succeeds.
 func (le *LeaderElector) acquire() {
 	stop := make(chan struct{})
-	util.Until(func() {
+	wait.JitterUntil(func() {
 		succeeded := le.tryAcquireOrRenew()
 		le.maybeReportTransition()
 		if !succeeded {
 			glog.V(4).Infof("failed to renew lease %v/%v", le.config.EndpointsMeta.Namespace, le.config.EndpointsMeta.Name)
-			time.Sleep(wait.Jitter(le.config.RetryPeriod, JitterFactor))
 			return
 		}
 		le.config.EventRecorder.Eventf(&api.Endpoints{ObjectMeta: le.config.EndpointsMeta}, api.EventTypeNormal, "%v became leader", le.config.Identity)
 		glog.Infof("sucessfully acquired lease %v/%v", le.config.EndpointsMeta.Namespace, le.config.EndpointsMeta.Name)
 		close(stop)
-	}, 0, stop)
+	}, le.config.RetryPeriod, JitterFactor, true, stop)
 }
 
 // renew loops calling tryAcquireOrRenew and returns immediately when tryAcquireOrRenew fails.
 func (le *LeaderElector) renew() {
 	stop := make(chan struct{})
-	util.Until(func() {
+	wait.Until(func() {
 		err := wait.Poll(le.config.RetryPeriod, le.config.RenewDeadline, func() (bool, error) {
 			return le.tryAcquireOrRenew(), nil
 		})
@@ -250,6 +249,7 @@ func (le *LeaderElector) tryAcquireOrRenew() bool {
 	e, err := le.config.Client.Endpoints(le.config.EndpointsMeta.Namespace).Get(le.config.EndpointsMeta.Name)
 	if err != nil {
 		if !errors.IsNotFound(err) {
+			glog.Errorf("error retrieving endpoint: %v", err)
 			return false
 		}
 
@@ -335,9 +335,9 @@ func (l *LeaderElector) maybeReportTransition() {
 func DefaultLeaderElectionConfiguration() componentconfig.LeaderElectionConfiguration {
 	return componentconfig.LeaderElectionConfiguration{
 		LeaderElect:   false,
-		LeaseDuration: unversioned.Duration{DefaultLeaseDuration},
-		RenewDeadline: unversioned.Duration{DefaultRenewDeadline},
-		RetryPeriod:   unversioned.Duration{DefaultRetryPeriod},
+		LeaseDuration: unversioned.Duration{Duration: DefaultLeaseDuration},
+		RenewDeadline: unversioned.Duration{Duration: DefaultRenewDeadline},
+		RetryPeriod:   unversioned.Duration{Duration: DefaultRetryPeriod},
 	}
 }
 

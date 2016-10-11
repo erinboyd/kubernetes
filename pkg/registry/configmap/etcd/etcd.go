@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,31 +18,36 @@ package etcd
 
 import (
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apis/extensions"
+	"k8s.io/kubernetes/pkg/registry/cachesize"
 	"k8s.io/kubernetes/pkg/registry/configmap"
 	"k8s.io/kubernetes/pkg/registry/generic"
+	"k8s.io/kubernetes/pkg/registry/generic/registry"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/storage"
-
-	etcdgeneric "k8s.io/kubernetes/pkg/registry/generic/etcd"
 )
 
 // REST implements a RESTStorage for ConfigMap against etcd
 type REST struct {
-	*etcdgeneric.Etcd
+	*registry.Store
 }
 
 // NewREST returns a RESTStorage object that will work with ConfigMap objects.
-func NewREST(s storage.Interface, storageDecorator generic.StorageDecorator) *REST {
-	prefix := "/configmaps"
+func NewREST(opts generic.RESTOptions) *REST {
+	prefix := "/" + opts.ResourcePrefix
 
-	newListFunc := func() runtime.Object { return &extensions.ConfigMapList{} }
-	storageInterface := storageDecorator(
-		s, 100, &extensions.ConfigMap{}, prefix, false, newListFunc)
+	newListFunc := func() runtime.Object { return &api.ConfigMapList{} }
+	storageInterface, _ := opts.Decorator(
+		opts.StorageConfig,
+		cachesize.GetWatchCacheSizeByResource(cachesize.ConfigMaps),
+		&api.ConfigMap{},
+		prefix,
+		configmap.Strategy,
+		newListFunc,
+		storage.NoTriggerPublisher)
 
-	store := &etcdgeneric.Etcd{
+	store := &registry.Store{
 		NewFunc: func() runtime.Object {
-			return &extensions.ConfigMap{}
+			return &api.ConfigMap{}
 		},
 
 		// NewListFunc returns an object to store results of an etcd list.
@@ -51,27 +56,30 @@ func NewREST(s storage.Interface, storageDecorator generic.StorageDecorator) *RE
 		// Produces a path that etcd understands, to the root of the resource
 		// by combining the namespace in the context with the given prefix.
 		KeyRootFunc: func(ctx api.Context) string {
-			return etcdgeneric.NamespaceKeyRootFunc(ctx, prefix)
+			return registry.NamespaceKeyRootFunc(ctx, prefix)
 		},
 
 		// Produces a path that etcd understands, to the resource by combining
 		// the namespace in the context with the given prefix
 		KeyFunc: func(ctx api.Context, name string) (string, error) {
-			return etcdgeneric.NamespaceKeyFunc(ctx, prefix, name)
+			return registry.NamespaceKeyFunc(ctx, prefix, name)
 		},
 
 		// Retrieves the name field of a ConfigMap object.
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
-			return obj.(*extensions.ConfigMap).Name, nil
+			return obj.(*api.ConfigMap).Name, nil
 		},
 
 		// Matches objects based on labels/fields for list and watch
 		PredicateFunc: configmap.MatchConfigMap,
 
-		QualifiedResource: extensions.Resource("configmaps"),
+		QualifiedResource: api.Resource("configmaps"),
+
+		DeleteCollectionWorkers: opts.DeleteCollectionWorkers,
 
 		CreateStrategy: configmap.Strategy,
 		UpdateStrategy: configmap.Strategy,
+		DeleteStrategy: configmap.Strategy,
 
 		Storage: storageInterface,
 	}

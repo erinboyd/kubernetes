@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,16 +28,24 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/rest"
+	apiservice "k8s.io/kubernetes/pkg/api/service"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/validation"
 	"k8s.io/kubernetes/pkg/registry/endpoint"
 	"k8s.io/kubernetes/pkg/registry/service/ipallocator"
 	"k8s.io/kubernetes/pkg/registry/service/portallocator"
 	"k8s.io/kubernetes/pkg/runtime"
+	featuregate "k8s.io/kubernetes/pkg/util/config"
 	utilnet "k8s.io/kubernetes/pkg/util/net"
 	"k8s.io/kubernetes/pkg/util/validation/field"
 	"k8s.io/kubernetes/pkg/watch"
 )
+
+// ServiceRest includes storage for services and all sub resources
+type ServiceRest struct {
+	Service *REST
+	Proxy   *ProxyREST
+}
 
 // REST adapts a service registry into apiserver's RESTStorage model.
 type REST struct {
@@ -50,13 +58,17 @@ type REST struct {
 
 // NewStorage returns a new REST.
 func NewStorage(registry Registry, endpoints endpoint.Registry, serviceIPs ipallocator.Interface,
-	serviceNodePorts portallocator.Interface, proxyTransport http.RoundTripper) *REST {
-	return &REST{
+	serviceNodePorts portallocator.Interface, proxyTransport http.RoundTripper) *ServiceRest {
+	rest := &REST{
 		registry:         registry,
 		endpoints:        endpoints,
 		serviceIPs:       serviceIPs,
 		serviceNodePorts: serviceNodePorts,
 		proxyTransport:   proxyTransport,
+	}
+	return &ServiceRest{
+		Service: rest,
+		Proxy:   &ProxyREST{ServiceRest: rest, ProxyTransport: proxyTransport},
 	}
 }
 
@@ -102,24 +114,75 @@ func (rs *REST) Create(ctx api.Context, obj runtime.Object) (runtime.Object, err
 	}
 
 	assignNodePorts := shouldAssignNodePorts(service)
+	svcPortToNodePort := map[int]int{}
 	for i := range service.Spec.Ports {
 		servicePort := &service.Spec.Ports[i]
-		if servicePort.NodePort != 0 {
-			err := nodePortOp.Allocate(servicePort.NodePort)
-			if err != nil {
-				// TODO: when validation becomes versioned, this gets more complicated.
-				el := field.ErrorList{field.Invalid(field.NewPath("spec", "ports").Index(i).Child("nodePort"), servicePort.NodePort, err.Error())}
-				return nil, errors.NewInvalid(api.Kind("Service"), service.Name, el)
+		allocatedNodePort := svcPortToNodePort[int(servicePort.Port)]
+		if allocatedNodePort == 0 {
+			// This will only scan forward in the service.Spec.Ports list because any matches
+			// before the current port would have been found in svcPortToNodePort. This is really
+			// looking for any user provided values.
+			np := findRequestedNodePort(int(servicePort.Port), service.Spec.Ports)
+			if np != 0 {
+				err := nodePortOp.Allocate(np)
+				if err != nil {
+					// TODO: when validation becomes versioned, this gets more complicated.
+					el := field.ErrorList{field.Invalid(field.NewPath("spec", "ports").Index(i).Child("nodePort"), np, err.Error())}
+					return nil, errors.NewInvalid(api.Kind("Service"), service.Name, el)
+				}
+				servicePort.NodePort = int32(np)
+				svcPortToNodePort[int(servicePort.Port)] = np
+			} else if assignNodePorts {
+				nodePort, err := nodePortOp.AllocateNext()
+				if err != nil {
+					// TODO: what error should be returned here?  It's not a
+					// field-level validation failure (the field is valid), and it's
+					// not really an internal error.
+					return nil, errors.NewInternalError(fmt.Errorf("failed to allocate a nodePort: %v", err))
+				}
+				servicePort.NodePort = int32(nodePort)
+				svcPortToNodePort[int(servicePort.Port)] = nodePort
 			}
-		} else if assignNodePorts {
-			nodePort, err := nodePortOp.AllocateNext()
+		} else if int(servicePort.NodePort) != allocatedNodePort {
+			if servicePort.NodePort == 0 {
+				servicePort.NodePort = int32(allocatedNodePort)
+			} else {
+				err := nodePortOp.Allocate(int(servicePort.NodePort))
+				if err != nil {
+					// TODO: when validation becomes versioned, this gets more complicated.
+					el := field.ErrorList{field.Invalid(field.NewPath("spec", "ports").Index(i).Child("nodePort"), servicePort.NodePort, err.Error())}
+					return nil, errors.NewInvalid(api.Kind("Service"), service.Name, el)
+				}
+			}
+		}
+	}
+
+	if featuregate.DefaultFeatureGate.ExternalTrafficLocalOnly() && shouldCheckOrAssignHealthCheckNodePort(service) {
+		var healthCheckNodePort int
+		var err error
+		if l, ok := service.Annotations[apiservice.AnnotationHealthCheckNodePort]; ok {
+			healthCheckNodePort, err = strconv.Atoi(l)
+			if err != nil || healthCheckNodePort <= 0 {
+				return nil, errors.NewInternalError(fmt.Errorf("Failed to parse annotation %v: %v", apiservice.AnnotationHealthCheckNodePort, err))
+			}
+		}
+		if healthCheckNodePort > 0 {
+			// If the request has a health check nodePort in mind, attempt to reserve it
+			err := nodePortOp.Allocate(int(healthCheckNodePort))
+			if err != nil {
+				return nil, errors.NewInternalError(fmt.Errorf("Failed to allocate requested HealthCheck nodePort %v: %v", healthCheckNodePort, err))
+			}
+		} else {
+			// If the request has no health check nodePort specified, allocate any
+			healthCheckNodePort, err = nodePortOp.AllocateNext()
 			if err != nil {
 				// TODO: what error should be returned here?  It's not a
 				// field-level validation failure (the field is valid), and it's
 				// not really an internal error.
 				return nil, errors.NewInternalError(fmt.Errorf("failed to allocate a nodePort: %v", err))
 			}
-			servicePort.NodePort = nodePort
+			// Insert the newly allocated health check port as an annotation (plan of record for Alpha)
+			service.Annotations[apiservice.AnnotationHealthCheckNodePort] = fmt.Sprintf("%d", healthCheckNodePort)
 		}
 	}
 
@@ -188,6 +251,12 @@ func (rs *REST) Watch(ctx api.Context, options *api.ListOptions) (watch.Interfac
 	return rs.registry.WatchServices(ctx, options)
 }
 
+// Export returns Service stripped of cluster-specific information.
+// It implements rest.Exporter.
+func (rs *REST) Export(ctx api.Context, name string, opts unversioned.ExportOptions) (runtime.Object, error) {
+	return rs.registry.ExportService(ctx, name, opts)
+}
+
 func (*REST) New() runtime.Object {
 	return &api.Service{}
 }
@@ -196,15 +265,20 @@ func (*REST) NewList() runtime.Object {
 	return &api.ServiceList{}
 }
 
-func (rs *REST) Update(ctx api.Context, obj runtime.Object) (runtime.Object, bool, error) {
+func (rs *REST) Update(ctx api.Context, name string, objInfo rest.UpdatedObjectInfo) (runtime.Object, bool, error) {
+	oldService, err := rs.registry.GetService(ctx, name)
+	if err != nil {
+		return nil, false, err
+	}
+
+	obj, err := objInfo.UpdatedObject(ctx, oldService)
+	if err != nil {
+		return nil, false, err
+	}
+
 	service := obj.(*api.Service)
 	if !api.ValidNamespace(ctx, &service.ObjectMeta) {
 		return nil, false, errors.NewConflict(api.Resource("services"), service.Namespace, fmt.Errorf("Service.Namespace does not match the provided context"))
-	}
-
-	oldService, err := rs.registry.GetService(ctx, service.Name)
-	if err != nil {
-		return nil, false, err
 	}
 
 	// Copy over non-user fields
@@ -224,7 +298,7 @@ func (rs *REST) Update(ctx api.Context, obj runtime.Object) (runtime.Object, boo
 	if assignNodePorts {
 		for i := range service.Spec.Ports {
 			servicePort := &service.Spec.Ports[i]
-			nodePort := servicePort.NodePort
+			nodePort := int(servicePort.NodePort)
 			if nodePort != 0 {
 				if !contains(oldNodePorts, nodePort) {
 					err := nodePortOp.Allocate(nodePort)
@@ -241,7 +315,7 @@ func (rs *REST) Update(ctx api.Context, obj runtime.Object) (runtime.Object, boo
 					// not really an internal error.
 					return nil, false, errors.NewInternalError(fmt.Errorf("failed to allocate a nodePort: %v", err))
 				}
-				servicePort.NodePort = nodePort
+				servicePort.NodePort = int32(nodePort)
 			}
 			// Detect duplicate node ports; this should have been caught by validation, so we panic
 			if contains(newNodePorts, nodePort) {
@@ -300,7 +374,7 @@ func (rs *REST) ResourceLocation(ctx api.Context, id string) (*url.URL, http.Rou
 		}
 		found := false
 		for _, svcPort := range svc.Spec.Ports {
-			if svcPort.Port == int(portNum) {
+			if int64(svcPort.Port) == portNum {
 				// use the declared port's name
 				portStr = svcPort.Name
 				found = true
@@ -331,7 +405,7 @@ func (rs *REST) ResourceLocation(ctx api.Context, id string) (*url.URL, http.Rou
 			if ss.Ports[i].Name == portStr {
 				// Pick a random address.
 				ip := ss.Addresses[rand.Intn(len(ss.Addresses))].IP
-				port := ss.Ports[i].Port
+				port := int(ss.Ports[i].Port)
 				return &url.URL{
 					Scheme: svcScheme,
 					Host:   net.JoinHostPort(ip, strconv.Itoa(port)),
@@ -358,7 +432,7 @@ func CollectServiceNodePorts(service *api.Service) []int {
 	for i := range service.Spec.Ports {
 		servicePort := &service.Spec.Ports[i]
 		if servicePort.NodePort != 0 {
-			servicePorts = append(servicePorts, servicePort.NodePort)
+			servicePorts = append(servicePorts, int(servicePort.NodePort))
 		}
 	}
 	return servicePorts
@@ -376,4 +450,25 @@ func shouldAssignNodePorts(service *api.Service) bool {
 		glog.Errorf("Unknown service type: %v", service.Spec.Type)
 		return false
 	}
+}
+
+func shouldCheckOrAssignHealthCheckNodePort(service *api.Service) bool {
+	if service.Spec.Type == api.ServiceTypeLoadBalancer {
+		// True if Service-type == LoadBalancer AND annotation AnnotationExternalTraffic present
+		return (featuregate.DefaultFeatureGate.ExternalTrafficLocalOnly() && apiservice.NeedsHealthCheck(service))
+	}
+	glog.V(4).Infof("Service type: %v does not need health check node port", service.Spec.Type)
+	return false
+}
+
+// Loop through the service ports list, find one with the same port number and
+// NodePort specified, return this NodePort otherwise return 0.
+func findRequestedNodePort(port int, servicePorts []api.ServicePort) int {
+	for i := range servicePorts {
+		servicePort := servicePorts[i]
+		if port == int(servicePort.Port) && servicePort.NodePort != 0 {
+			return int(servicePort.NodePort)
+		}
+	}
+	return 0
 }

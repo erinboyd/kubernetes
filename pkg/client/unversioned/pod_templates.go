@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -53,7 +53,7 @@ func newPodTemplates(c *Client, namespace string) *podTemplates {
 // List takes label and field selectors, and returns the list of podTemplates that match those selectors.
 func (c *podTemplates) List(opts api.ListOptions) (result *api.PodTemplateList, err error) {
 	result = &api.PodTemplateList{}
-	err = c.r.Get().Namespace(c.ns).Resource("podTemplates").VersionedParams(&opts, api.Scheme).Do().Into(result)
+	err = c.r.Get().Namespace(c.ns).Resource("podTemplates").VersionedParams(&opts, api.ParameterCodec).Do().Into(result)
 	return
 }
 
@@ -89,6 +89,6 @@ func (c *podTemplates) Watch(opts api.ListOptions) (watch.Interface, error) {
 		Prefix("watch").
 		Namespace(c.ns).
 		Resource("podTemplates").
-		VersionedParams(&opts, api.Scheme).
+		VersionedParams(&opts, api.ParameterCodec).
 		Watch()
 }

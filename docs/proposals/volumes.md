@@ -2,21 +2,26 @@
 
 <!-- BEGIN STRIP_FOR_RELEASE -->
 
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
 
 <h2>PLEASE NOTE: This document applies to the HEAD of the source tree</h2>
 
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
+
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
+<strong>
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.4/docs/proposals/volumes.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -90,15 +95,15 @@ There is a [proposal](https://github.com/docker/docker/pull/14632) to add a bind
 Docker to change the ownership of a volume to the effective UID and GID of a container, but this has
 not yet been accepted.
 
-### Rocket
+### rkt
 
-Rocket
+rkt
 [image manifests](https://github.com/appc/spec/blob/master/spec/aci.md#image-manifest-schema) can
-specify users and groups, similarly to how a Docker image can.  A Rocket
+specify users and groups, similarly to how a Docker image can.  A rkt
 [pod manifest](https://github.com/appc/spec/blob/master/spec/pods.md#pod-manifest-schema) can also
 override the default user and group specified by the image manifest.
 
-Rocket does not currently support supplemental groups or changing the owning UID or
+rkt does not currently support supplemental groups or changing the owning UID or
 group of a volume, but it has been [requested](https://github.com/coreos/rkt/issues/1309).
 
 ## Use Cases
@@ -152,9 +157,9 @@ created in the volume will inherit the owning GID of the volume.
 
 ## Community Design Discussion
 
-- [kubernetes/2630](https://github.com/GoogleCloudPlatform/kubernetes/issues/2630)
-- [kubernetes/11319](https://github.com/GoogleCloudPlatform/kubernetes/issues/11319)
-- [kubernetes/9384](https://github.com/GoogleCloudPlatform/kubernetes/pull/9384)
+- [kubernetes/2630](https://github.com/kubernetes/kubernetes/issues/2630)
+- [kubernetes/11319](https://github.com/kubernetes/kubernetes/issues/11319)
+- [kubernetes/9384](https://github.com/kubernetes/kubernetes/pull/9384)
 
 ## Analysis
 
@@ -296,13 +301,13 @@ or read the `pod.Spec.SecurityContext.FSGroup` field.
 
 ### Volume changes
 
-The `volume.Builder` interface should have a new method added that indicates whether the plugin
+The `volume.Mounter` interface should have a new method added that indicates whether the plugin
 supports ownership management:
 
 ```go
 package volume
 
-type Builder interface {
+type Mounter interface {
     // other methods omitted
 
     // SupportsOwnershipManagement indicates that this volume supports having ownership
@@ -398,7 +403,7 @@ func (kl *Kubelet) mountExternalVolumes(pod *api.Pod) (kubecontainer.VolumeMap, 
 
         // Try to use a plugin for this volume.
         internal := volume.NewSpecFromVolume(volSpec)
-        builder, err := kl.newVolumeBuilderFromPlugins(internal, pod, volume.VolumeOptions{RootContext: rootContext}, kl.mounter)
+        builder, err := kl.newVolumeMounterFromPlugins(internal, pod, volume.VolumeOptions{RootContext: rootContext}, kl.mounter)
         if err != nil {
             glog.Errorf("Could not create volume builder for pod %s: %v", pod.UID, err)
             return nil, err

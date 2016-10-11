@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,12 +23,13 @@ import (
 	"strings"
 	"time"
 
+	unversionedcore "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/unversioned"
+
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/util/validation"
 )
 
@@ -41,7 +42,7 @@ const (
 // Create creates a new node api object with the given hostname,
 // slave attribute labels and annotations
 func Create(
-	client *client.Client,
+	client unversionedcore.NodesGetter,
 	hostName string,
 	slaveAttrLabels,
 	annotations map[string]string,
@@ -87,7 +88,7 @@ func Create(
 // The updated node merges the given slave attribute labels
 // and annotations with the found api object.
 func Update(
-	client *client.Client,
+	client unversionedcore.NodesGetter,
 	hostname string,
 	slaveAttrLabels,
 	annotations map[string]string,
@@ -122,7 +123,7 @@ func Update(
 
 // CreateOrUpdate creates a node api object or updates an existing one
 func CreateOrUpdate(
-	client *client.Client,
+	client unversionedcore.NodesGetter,
 	hostname string,
 	slaveAttrLabels,
 	annotations map[string]string,
@@ -179,13 +180,13 @@ func SlaveAttributesToLabels(attrs []*mesos.Attribute) map[string]string {
 			v = strconv.FormatFloat(a.GetScalar().GetValue(), 'G', -1, 64)
 		}
 
-		if !validation.IsQualifiedName(k) {
-			log.V(3).Infof("ignoring invalid node label name %q", k)
+		if errs := validation.IsQualifiedName(k); len(errs) != 0 {
+			log.V(3).Infof("ignoring invalid node label %q: %v", k, errs)
 			continue
 		}
 
-		if !validation.IsValidLabelValue(v) {
-			log.V(3).Infof("ignoring invalid node label %s value: %q", k, v)
+		if errs := validation.IsValidLabelValue(v); len(errs) != 0 {
+			log.V(3).Infof("ignoring invalid node %s=%q: %v", k, v, errs)
 			continue
 		}
 

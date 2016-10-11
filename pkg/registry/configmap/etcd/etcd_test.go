@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic"
@@ -30,12 +29,13 @@ import (
 )
 
 func newStorage(t *testing.T) (*REST, *etcdtesting.EtcdTestServer) {
-	etcdStorage, server := registrytest.NewEtcdStorage(t, "extensions")
-	return NewREST(etcdStorage, generic.UndecoratedStorage), server
+	etcdStorage, server := registrytest.NewEtcdStorage(t, "")
+	restOptions := generic.RESTOptions{StorageConfig: etcdStorage, Decorator: generic.UndecoratedStorage, DeleteCollectionWorkers: 1}
+	return NewREST(restOptions), server
 }
 
-func validNewConfigMap() *extensions.ConfigMap {
-	return &extensions.ConfigMap{
+func validNewConfigMap() *api.ConfigMap {
+	return &api.ConfigMap{
 		ObjectMeta: api.ObjectMeta{
 			Name:      "foo",
 			Namespace: "default",
@@ -53,7 +53,7 @@ func validNewConfigMap() *extensions.ConfigMap {
 func TestCreate(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
-	test := registrytest.New(t, storage.Etcd)
+	test := registrytest.New(t, storage.Store)
 
 	validConfigMap := validNewConfigMap()
 	validConfigMap.ObjectMeta = api.ObjectMeta{
@@ -62,13 +62,13 @@ func TestCreate(t *testing.T) {
 
 	test.TestCreate(
 		validConfigMap,
-		&extensions.ConfigMap{
+		&api.ConfigMap{
 			ObjectMeta: api.ObjectMeta{Name: "badName"},
 			Data: map[string]string{
 				"key": "value",
 			},
 		},
-		&extensions.ConfigMap{
+		&api.ConfigMap{
 			ObjectMeta: api.ObjectMeta{Name: "name-2"},
 			Data: map[string]string{
 				"..dotfile": "do: nothing\n",
@@ -80,20 +80,20 @@ func TestCreate(t *testing.T) {
 func TestUpdate(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
-	test := registrytest.New(t, storage.Etcd)
+	test := registrytest.New(t, storage.Store)
 	test.TestUpdate(
 		// valid
 		validNewConfigMap(),
 		// updateFunc
 		func(obj runtime.Object) runtime.Object {
-			cfg := obj.(*extensions.ConfigMap)
+			cfg := obj.(*api.ConfigMap)
 			cfg.Data["update-test"] = "value"
 			return cfg
 		},
 		// invalid updateFunc
 		func(obj runtime.Object) runtime.Object {
-			cfg := obj.(*extensions.ConfigMap)
-			cfg.Data["badKey"] = "value"
+			cfg := obj.(*api.ConfigMap)
+			cfg.Data["bad*Key"] = "value"
 			return cfg
 		},
 	)
@@ -102,28 +102,28 @@ func TestUpdate(t *testing.T) {
 func TestDelete(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
-	test := registrytest.New(t, storage.Etcd)
+	test := registrytest.New(t, storage.Store)
 	test.TestDelete(validNewConfigMap())
 }
 
 func TestGet(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
-	test := registrytest.New(t, storage.Etcd)
+	test := registrytest.New(t, storage.Store)
 	test.TestGet(validNewConfigMap())
 }
 
 func TestList(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
-	test := registrytest.New(t, storage.Etcd)
+	test := registrytest.New(t, storage.Store)
 	test.TestList(validNewConfigMap())
 }
 
 func TestWatch(t *testing.T) {
 	storage, server := newStorage(t)
 	defer server.Terminate(t)
-	test := registrytest.New(t, storage.Etcd)
+	test := registrytest.New(t, storage.Store)
 	test.TestWatch(
 		validNewConfigMap(),
 		// matching labels

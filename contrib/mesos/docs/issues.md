@@ -37,7 +37,7 @@ Setting either of these flags to non-zero values may impact connection tracking 
 In order for pods (replicated, or otherwise) to be scheduled on the cluster, it is strongly recommended that:
 * `pod.spec.containers[x].ports[y].hostPort` be left unspecified (or zero), or else;
 * `pod.spec.containers[x].ports[y].hostPort` exists in the range of `ports` resources declared on Mesos slaves
-  - double-check the resource declaraions for your Mesos slaves, the default for `ports` is typically `[31000-32000]`
+  - double-check the resource declarations for your Mesos slaves, the default for `ports` is typically `[31000-32000]`
 
 Mesos slave host `ports` are resources that are managed by the Mesos resource/offers ecosystem; slave host ports are consumed by launched tasks.
 Kubernetes pod container specifications identify two types of ports, "container ports" and "host ports":
@@ -137,7 +137,8 @@ Host ports that are not defined, or else defined as zero, will automatically be 
 
 To disable the work-around and revert to vanilla Kubernetes service endpoint termination:
 
-- execute the k8sm controller-manager with `-host_port_endpoints=false`;
+- execute the k8sm scheduler with `-host-port-endpoints=false`
+- execute the k8sm controller-manager with `-host-port-endpoints=false`
 
 Then the usual Kubernetes network assumptions must be fulfilled for Kubernetes to work with Mesos, i.e. each container must get a cluster-wide routable IP (compare [Kubernetes Networking documentation](../../../docs/design/networking.md#container-to-container)).
 

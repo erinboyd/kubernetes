@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2015 The Kubernetes Authors All rights reserved.
+# Copyright 2015 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -289,7 +289,7 @@ function kube-up {
 
   # Wait for addons to deploy
   cluster::mesos::docker::await_ready "kube-dns" "${MESOS_DOCKER_ADDON_TIMEOUT}"
-  cluster::mesos::docker::await_ready "kube-ui" "${MESOS_DOCKER_ADDON_TIMEOUT}"
+  cluster::mesos::docker::await_ready "kubernetes-dashboard" "${MESOS_DOCKER_ADDON_TIMEOUT}"
 
   trap - EXIT
 }
@@ -302,7 +302,7 @@ function validate-cluster {
 
   # Validate immediate cluster reachability and responsiveness
   echo "KubeDNS: $(cluster::mesos::docker::addon_status 'kube-dns')"
-  echo "KubeUI: $(cluster::mesos::docker::addon_status 'kube-ui')"
+  echo "Kubernetes Dashboard: $(cluster::mesos::docker::addon_status 'kubernetes-dashboard')"
 }
 
 # Delete a kubernetes cluster
@@ -317,7 +317,8 @@ function kube-down {
 }
 
 function test-setup {
-  echo "TODO: test-setup" 1>&2
+  echo "test-setup" 1>&2
+  "${KUBE_ROOT}/cluster/kube-up.sh"
 }
 
 # Execute after running tests to perform any required clean-up
@@ -331,16 +332,6 @@ function test-teardown {
 # SSH to a node by name or IP ($1) and run a command ($2).
 function ssh-to-node {
   echo "TODO: ssh-to-node" 1>&2
-}
-
-# Restart the kube-proxy on a node ($1)
-function restart-kube-proxy {
-  echo "TODO: restart-kube-proxy" 1>&2
-}
-
-# Restart the apiserver
-function restart-apiserver {
-  echo "TODO: restart-apiserver" 1>&2
 }
 
 # Waits for a kube-system pod (of the provided name) to have the phase/status "Running".

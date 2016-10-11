@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,12 +22,14 @@ import (
 	"strings"
 	"testing"
 
+	"net/http"
+	"net/url"
+	"time"
+
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/apiserver"
 	"k8s.io/kubernetes/pkg/probe"
-	"k8s.io/kubernetes/pkg/util"
-	"net/url"
-	"time"
+	"k8s.io/kubernetes/pkg/util/diff"
 )
 
 type fakeHttpProber struct {
@@ -36,7 +38,7 @@ type fakeHttpProber struct {
 	err    error
 }
 
-func (f *fakeHttpProber) Probe(*url.URL, time.Duration) (probe.Result, string, error) {
+func (f *fakeHttpProber) Probe(*url.URL, http.Header, time.Duration) (probe.Result, string, error) {
 	return f.result, f.body, f.err
 }
 
@@ -81,7 +83,7 @@ func TestList_NoError(t *testing.T) {
 		Items: []api.ComponentStatus{*(createTestStatus("test1", api.ConditionTrue, "ok", ""))},
 	}
 	if e, a := expect, got; !reflect.DeepEqual(e, a) {
-		t.Errorf("Got unexpected object. Diff: %s", util.ObjectDiff(e, a))
+		t.Errorf("Got unexpected object. Diff: %s", diff.ObjectDiff(e, a))
 	}
 }
 
@@ -96,7 +98,7 @@ func TestList_FailedCheck(t *testing.T) {
 			*(createTestStatus("test1", api.ConditionFalse, "", ""))},
 	}
 	if e, a := expect, got; !reflect.DeepEqual(e, a) {
-		t.Errorf("Got unexpected object. Diff: %s", util.ObjectDiff(e, a))
+		t.Errorf("Got unexpected object. Diff: %s", diff.ObjectDiff(e, a))
 	}
 }
 
@@ -111,7 +113,7 @@ func TestList_UnknownError(t *testing.T) {
 			*(createTestStatus("test1", api.ConditionUnknown, "", "fizzbuzz error"))},
 	}
 	if e, a := expect, got; !reflect.DeepEqual(e, a) {
-		t.Errorf("Got unexpected object. Diff: %s", util.ObjectDiff(e, a))
+		t.Errorf("Got unexpected object. Diff: %s", diff.ObjectDiff(e, a))
 	}
 }
 
@@ -123,7 +125,7 @@ func TestGet_NoError(t *testing.T) {
 	}
 	expect := createTestStatus("test1", api.ConditionTrue, "ok", "")
 	if e, a := expect, got; !reflect.DeepEqual(e, a) {
-		t.Errorf("Got unexpected object. Diff: %s", util.ObjectDiff(e, a))
+		t.Errorf("Got unexpected object. Diff: %s", diff.ObjectDiff(e, a))
 	}
 }
 

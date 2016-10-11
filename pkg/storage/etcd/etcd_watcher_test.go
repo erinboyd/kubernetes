@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ var versioner = APIObjectVersioner{}
 // Implements etcdCache interface as empty methods (i.e. does not cache any objects)
 type fakeEtcdCache struct{}
 
-func (f *fakeEtcdCache) getFromCache(index uint64, filter storage.FilterFunc) (runtime.Object, bool) {
+func (f *fakeEtcdCache) getFromCache(index uint64, filter storage.Filter) (runtime.Object, bool) {
 	return nil, false
 }
 
@@ -48,17 +48,26 @@ func (f *fakeEtcdCache) addToCache(index uint64, obj runtime.Object) {
 
 var _ etcdCache = &fakeEtcdCache{}
 
+// firstLetterIsB implements storage.Filter interface.
+type firstLetterIsB struct {
+}
+
+func (f *firstLetterIsB) Filter(obj runtime.Object) bool {
+	return obj.(*api.Pod).Name[0] == 'b'
+}
+
+func (f *firstLetterIsB) Trigger() []storage.MatchValue {
+	return nil
+}
+
 func TestWatchInterpretations(t *testing.T) {
 	codec := testapi.Default.Codec()
 	// Declare some pods to make the test cases compact.
 	podFoo := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}
 	podBar := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "bar"}}
 	podBaz := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "baz"}}
-	firstLetterIsB := func(obj runtime.Object) bool {
-		return obj.(*api.Pod).Name[0] == 'b'
-	}
 
-	// All of these test cases will be run with the firstLetterIsB FilterFunc.
+	// All of these test cases will be run with the firstLetterIsB Filter.
 	table := map[string]struct {
 		actions       []string // Run this test item for every action here.
 		prevNodeValue string
@@ -131,7 +140,7 @@ func TestWatchInterpretations(t *testing.T) {
 
 	for name, item := range table {
 		for _, action := range item.actions {
-			w := newEtcdWatcher(true, nil, firstLetterIsB, codec, versioner, nil, &fakeEtcdCache{})
+			w := newEtcdWatcher(true, false, nil, &firstLetterIsB{}, codec, versioner, nil, &fakeEtcdCache{})
 			emitCalled := false
 			w.emit = func(event watch.Event) {
 				emitCalled = true
@@ -169,7 +178,8 @@ func TestWatchInterpretations(t *testing.T) {
 }
 
 func TestWatchInterpretation_ResponseNotSet(t *testing.T) {
-	w := newEtcdWatcher(false, nil, storage.Everything, codec, versioner, nil, &fakeEtcdCache{})
+	_, codec := testScheme(t)
+	w := newEtcdWatcher(false, false, nil, storage.Everything, codec, versioner, nil, &fakeEtcdCache{})
 	w.emit = func(e watch.Event) {
 		t.Errorf("Unexpected emit: %v", e)
 	}
@@ -181,9 +191,10 @@ func TestWatchInterpretation_ResponseNotSet(t *testing.T) {
 }
 
 func TestWatchInterpretation_ResponseNoNode(t *testing.T) {
+	_, codec := testScheme(t)
 	actions := []string{"create", "set", "compareAndSwap", "delete"}
 	for _, action := range actions {
-		w := newEtcdWatcher(false, nil, storage.Everything, codec, versioner, nil, &fakeEtcdCache{})
+		w := newEtcdWatcher(false, false, nil, storage.Everything, codec, versioner, nil, &fakeEtcdCache{})
 		w.emit = func(e watch.Event) {
 			t.Errorf("Unexpected emit: %v", e)
 		}
@@ -195,9 +206,10 @@ func TestWatchInterpretation_ResponseNoNode(t *testing.T) {
 }
 
 func TestWatchInterpretation_ResponseBadData(t *testing.T) {
+	_, codec := testScheme(t)
 	actions := []string{"create", "set", "compareAndSwap", "delete"}
 	for _, action := range actions {
-		w := newEtcdWatcher(false, nil, storage.Everything, codec, versioner, nil, &fakeEtcdCache{})
+		w := newEtcdWatcher(false, false, nil, storage.Everything, codec, versioner, nil, &fakeEtcdCache{})
 		w.emit = func(e watch.Event) {
 			t.Errorf("Unexpected emit: %v", e)
 		}
@@ -217,23 +229,74 @@ func TestWatchInterpretation_ResponseBadData(t *testing.T) {
 	}
 }
 
-/* re-Disabling due to flakes seen upstream #18914
-func TestWatchEtcdError(t *testing.T) {
+func TestSendResultDeleteEventHaveLatestIndex(t *testing.T) {
 	codec := testapi.Default.Codec()
-	server := etcdtesting.NewEtcdTestClientServer(t)
-	h := newEtcdHelper(server.Client, codec, etcdtest.PathPrefix())
-	watching, err := h.Watch(context.TODO(), "/some/key", "4", storage.Everything)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
+	filterFunc := func(obj runtime.Object) bool {
+		return obj.(*api.Pod).Name != "bar"
 	}
-	server.Terminate(t)
+	filter := storage.NewSimpleFilter(filterFunc, storage.NoTriggerFunc)
+	w := newEtcdWatcher(false, false, nil, filter, codec, versioner, nil, &fakeEtcdCache{})
 
-	got, ok := <-watching.ResultChan()
-	if ok && got.Type != watch.Error {
-		t.Fatalf("Unexpected non-error")
+	eventChan := make(chan watch.Event, 1)
+	w.emit = func(e watch.Event) {
+		eventChan <- e
 	}
-	watching.Stop()
-}*/
+
+	fooPod := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}
+	barPod := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "bar"}}
+	fooBytes, err := runtime.Encode(codec, fooPod)
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+	barBytes, err := runtime.Encode(codec, barPod)
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+
+	tests := []struct {
+		response *etcd.Response
+		expRV    string
+	}{{ // Delete event
+		response: &etcd.Response{
+			Action: EtcdDelete,
+			Node: &etcd.Node{
+				ModifiedIndex: 2,
+			},
+			PrevNode: &etcd.Node{
+				Value:         string(fooBytes),
+				ModifiedIndex: 1,
+			},
+		},
+		expRV: "2",
+	}, { // Modify event with uninterested data
+		response: &etcd.Response{
+			Action: EtcdSet,
+			Node: &etcd.Node{
+				Value:         string(barBytes),
+				ModifiedIndex: 2,
+			},
+			PrevNode: &etcd.Node{
+				Value:         string(fooBytes),
+				ModifiedIndex: 1,
+			},
+		},
+		expRV: "2",
+	}}
+
+	for i, tt := range tests {
+		w.sendResult(tt.response)
+		ev := <-eventChan
+		if ev.Type != watch.Deleted {
+			t.Errorf("#%d: event type want=Deleted, get=%s", i, ev.Type)
+			return
+		}
+		rv := ev.Object.(*api.Pod).ResourceVersion
+		if rv != tt.expRV {
+			t.Errorf("#%d: resource version want=%s, get=%s", i, tt.expRV, rv)
+		}
+	}
+	w.Stop()
+}
 
 func TestWatch(t *testing.T) {
 	codec := testapi.Default.Codec()
@@ -251,7 +314,7 @@ func TestWatch(t *testing.T) {
 	// Test normal case
 	pod := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}
 	returnObj := &api.Pod{}
-	err = h.Set(context.TODO(), key, pod, returnObj, 0)
+	err = h.Create(context.TODO(), key, pod, returnObj, 0)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -285,7 +348,7 @@ func emptySubsets() []api.EndpointSubset {
 func makeSubsets(ip string, port int) []api.EndpointSubset {
 	return []api.EndpointSubset{{
 		Addresses: []api.EndpointAddress{{IP: ip}},
-		Ports:     []api.EndpointPort{{Port: port}},
+		Ports:     []api.EndpointPort{{Port: int32(port)}},
 	}}
 }
 
@@ -307,7 +370,7 @@ func TestWatchEtcdState(t *testing.T) {
 		Subsets:    emptySubsets(),
 	}
 
-	err = h.Set(context.TODO(), key, endpoint, endpoint, 0)
+	err = h.Create(context.TODO(), key, endpoint, endpoint, 0)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -319,9 +382,18 @@ func TestWatchEtcdState(t *testing.T) {
 
 	subset := makeSubsets("127.0.0.1", 9000)
 	endpoint.Subsets = subset
+	endpoint.ResourceVersion = ""
 
 	// CAS the previous value
-	err = h.Set(context.TODO(), key, endpoint, endpoint, 0)
+	updateFn := func(input runtime.Object, res storage.ResponseMeta) (runtime.Object, *uint64, error) {
+		newObj, err := api.Scheme.DeepCopy(endpoint)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+			return nil, nil, err
+		}
+		return newObj.(*api.Endpoints), nil, nil
+	}
+	err = h.GuaranteedUpdate(context.TODO(), key, &api.Endpoints{}, false, nil, updateFn)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -332,7 +404,7 @@ func TestWatchEtcdState(t *testing.T) {
 	}
 
 	if e, a := endpoint, event.Object; !api.Semantic.DeepDerivative(e, a) {
-		t.Errorf("%s: expected %v, got %v", e, a)
+		t.Errorf("Unexpected error: expected %#v, got %#v", e, a)
 	}
 }
 
@@ -347,14 +419,19 @@ func TestWatchFromZeroIndex(t *testing.T) {
 	h := newEtcdHelper(server.Client, codec, etcdtest.PathPrefix())
 
 	// set before the watch and verify events
-	err := h.Set(context.TODO(), key, pod, pod, 0)
+	err := h.Create(context.TODO(), key, pod, pod, 0)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
+	pod.ResourceVersion = ""
 
 	// check for concatenation on watch event with CAS
-	pod.Name = "bar"
-	err = h.Set(context.TODO(), key, pod, pod, 0)
+	updateFn := func(input runtime.Object, res storage.ResponseMeta) (runtime.Object, *uint64, error) {
+		pod := input.(*api.Pod)
+		pod.Name = "bar"
+		return pod, nil, nil
+	}
+	err = h.GuaranteedUpdate(context.TODO(), key, &api.Pod{}, false, nil, updateFn)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -371,7 +448,13 @@ func TestWatchFromZeroIndex(t *testing.T) {
 		t.Errorf("Unexpected event %#v", event)
 	}
 
-	err = h.Set(context.TODO(), key, pod, pod, 0)
+	pod.Name = "baz"
+	updateFn = func(input runtime.Object, res storage.ResponseMeta) (runtime.Object, *uint64, error) {
+		pod := input.(*api.Pod)
+		pod.Name = "baz"
+		return pod, nil, nil
+	}
+	err = h.GuaranteedUpdate(context.TODO(), key, &api.Pod{}, false, nil, updateFn)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -382,7 +465,7 @@ func TestWatchFromZeroIndex(t *testing.T) {
 	}
 
 	if e, a := pod, event.Object; !api.Semantic.DeepDerivative(e, a) {
-		t.Errorf("%s: expected %v, got %v", e, a)
+		t.Errorf("Unexpected error: expected %#v, got %#v", e, a)
 	}
 }
 
@@ -412,7 +495,7 @@ func TestWatchListFromZeroIndex(t *testing.T) {
 	}
 
 	if e, a := pod, event.Object; !api.Semantic.DeepDerivative(e, a) {
-		t.Errorf("%s: expected %v, got %v", e, a)
+		t.Errorf("Unexpected error: expected %v, got %v", e, a)
 	}
 }
 
@@ -448,6 +531,7 @@ func TestWatchListIgnoresRootKey(t *testing.T) {
 }
 
 func TestWatchPurposefulShutdown(t *testing.T) {
+	_, codec := testScheme(t)
 	server := etcdtesting.NewEtcdTestClientServer(t)
 	defer server.Terminate(t)
 	key := "/some/key"

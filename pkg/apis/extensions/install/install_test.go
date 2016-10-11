@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ import (
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
+	"k8s.io/kubernetes/pkg/runtime"
 )
 
 func TestResourceVersioner(t *testing.T) {
@@ -51,7 +52,7 @@ func TestCodec(t *testing.T) {
 	daemonSet := extensions.DaemonSet{}
 	// We do want to use package registered rather than testapi here, because we
 	// want to test if the package install and package registered work as expected.
-	data, err := registered.GroupOrDie(extensions.GroupName).Codec.Encode(&daemonSet)
+	data, err := runtime.Encode(api.Codecs.LegacyCodec(registered.GroupOrDie(extensions.GroupName).GroupVersion), &daemonSet)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,10 +78,9 @@ func TestInterfacesFor(t *testing.T) {
 
 func TestRESTMapper(t *testing.T) {
 	gv := v1beta1.SchemeGroupVersion
-	hpaGVK := gv.WithKind("HorizontalPodAutoscaler")
 	daemonSetGVK := gv.WithKind("DaemonSet")
 
-	if gvk, err := registered.GroupOrDie(extensions.GroupName).RESTMapper.KindFor(gv.WithResource("horizontalpodautoscalers")); err != nil || gvk != hpaGVK {
+	if gvk, err := registered.GroupOrDie(extensions.GroupName).RESTMapper.KindFor(gv.WithResource("daemonsets")); err != nil || gvk != daemonSetGVK {
 		t.Errorf("unexpected version mapping: %v %v", gvk, err)
 	}
 
@@ -89,12 +89,12 @@ func TestRESTMapper(t *testing.T) {
 	}
 
 	for _, version := range registered.GroupOrDie(extensions.GroupName).GroupVersions {
-		mapping, err := registered.GroupOrDie(extensions.GroupName).RESTMapper.RESTMapping(hpaGVK.GroupKind(), version.Version)
+		mapping, err := registered.GroupOrDie(extensions.GroupName).RESTMapper.RESTMapping(daemonSetGVK.GroupKind(), version.Version)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
 
-		if mapping.Resource != "horizontalpodautoscalers" {
+		if mapping.Resource != "daemonsets" {
 			t.Errorf("incorrect resource name: %#v", mapping)
 		}
 		if mapping.GroupVersionKind.GroupVersion() != version {
@@ -102,11 +102,11 @@ func TestRESTMapper(t *testing.T) {
 		}
 
 		interfaces, _ := registered.GroupOrDie(extensions.GroupName).InterfacesFor(version)
-		if mapping.Codec != interfaces.Codec {
-			t.Errorf("unexpected codec: %#v, expected: %#v", mapping, interfaces)
+		if mapping.ObjectConvertor != interfaces.ObjectConvertor {
+			t.Errorf("unexpected: %#v, expected: %#v", mapping, interfaces)
 		}
 
-		rc := &extensions.HorizontalPodAutoscaler{ObjectMeta: api.ObjectMeta{Name: "foo"}}
+		rc := &extensions.DaemonSet{ObjectMeta: api.ObjectMeta{Name: "foo"}}
 		name, err := mapping.MetadataAccessor.Name(rc)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)

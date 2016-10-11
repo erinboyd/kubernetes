@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,7 +26,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/fsouza/go-dockerclient"
+	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+
+	dockertypes "github.com/docker/engine-api/types"
 	"github.com/gogo/protobuf/proto"
 	log "github.com/golang/glog"
 	bindings "github.com/mesos/mesos-go/executor"
@@ -39,16 +41,11 @@ import (
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/executorinfo"
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/meta"
 	"k8s.io/kubernetes/pkg/api"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
+	apierrors "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/dockertools"
-	"k8s.io/kubernetes/pkg/util"
-)
-
-const (
-	containerPollTime = 1 * time.Second
-	lostPodPollTime   = 1 * time.Minute
-	podRelistPeriod   = 5 * time.Minute
+	kruntime "k8s.io/kubernetes/pkg/runtime"
+	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
 )
 
 type stateType int32
@@ -100,6 +97,7 @@ type Executor struct {
 	kubeletFinished      <-chan struct{} // signals that kubelet Run() died
 	exitFunc             func(int)
 	staticPodsConfigPath string
+	staticPodsFilters    podutil.Filters
 	launchGracePeriod    time.Duration
 	nodeInfos            chan<- NodeInfo
 	initCompleted        chan struct{} // closes upon completion of Init()
@@ -110,17 +108,20 @@ type Executor struct {
 }
 
 type Config struct {
-	APIClient            *client.Client
-	Docker               dockertools.DockerInterface
-	ShutdownAlert        func()
-	SuicideTimeout       time.Duration
-	KubeletFinished      <-chan struct{} // signals that kubelet Run() died
-	ExitFunc             func(int)
-	StaticPodsConfigPath string
-	LaunchGracePeriod    time.Duration
-	NodeInfos            chan<- NodeInfo
-	Registry             Registry
+	APIClient         *clientset.Clientset
+	Docker            dockertools.DockerInterface
+	ShutdownAlert     func()
+	SuicideTimeout    time.Duration
+	KubeletFinished   <-chan struct{} // signals that kubelet Run() died
+	ExitFunc          func(int)
+	LaunchGracePeriod time.Duration
+	NodeInfos         chan<- NodeInfo
+	Registry          Registry
+	Options           []Option // functional options
 }
+
+// Option is a functional option type for Executor
+type Option func(*Executor)
 
 func (k *Executor) isConnected() bool {
 	return connectedState == (&k.state).get()
@@ -136,22 +137,28 @@ func New(config Config) *Executor {
 		launchGracePeriod = time.Duration(math.MaxInt64)
 	}
 	k := &Executor{
-		state:                disconnectedState,
-		terminate:            make(chan struct{}),
-		outgoing:             make(chan func() (mesos.Status, error), 1024),
-		dockerClient:         config.Docker,
-		suicideTimeout:       config.SuicideTimeout,
-		kubeletFinished:      config.KubeletFinished,
-		suicideWatch:         &suicideTimer{},
-		shutdownAlert:        config.ShutdownAlert,
-		exitFunc:             config.ExitFunc,
-		staticPodsConfigPath: config.StaticPodsConfigPath,
-		launchGracePeriod:    launchGracePeriod,
-		nodeInfos:            config.NodeInfos,
-		initCompleted:        make(chan struct{}),
-		registry:             config.Registry,
-		kubeAPI:              &clientAPIWrapper{config.APIClient},
-		nodeAPI:              &clientAPIWrapper{config.APIClient},
+		state:             disconnectedState,
+		terminate:         make(chan struct{}),
+		outgoing:          make(chan func() (mesos.Status, error), 1024),
+		dockerClient:      config.Docker,
+		suicideTimeout:    config.SuicideTimeout,
+		kubeletFinished:   config.KubeletFinished,
+		suicideWatch:      &suicideTimer{},
+		shutdownAlert:     config.ShutdownAlert,
+		exitFunc:          config.ExitFunc,
+		launchGracePeriod: launchGracePeriod,
+		nodeInfos:         config.NodeInfos,
+		initCompleted:     make(chan struct{}),
+		registry:          config.Registry,
+	}
+	if config.APIClient != nil {
+		k.kubeAPI = &clientAPIWrapper{config.APIClient.Core()}
+		k.nodeAPI = &clientAPIWrapper{config.APIClient.Core()}
+	}
+
+	// apply functional options
+	for _, opt := range config.Options {
+		opt(k)
 	}
 
 	runtime.On(k.initCompleted, k.runSendLoop)
@@ -160,6 +167,14 @@ func New(config Config) *Executor {
 	runtime.On(k.initCompleted, k.watcher.run)
 
 	return k
+}
+
+// StaticPods creates a static pods Option for an Executor
+func StaticPods(configPath string, f podutil.Filters) Option {
+	return func(k *Executor) {
+		k.staticPodsFilters = f
+		k.staticPodsConfigPath = configPath
+	}
 }
 
 // Done returns a chan that closes when the executor is shutting down
@@ -223,12 +238,7 @@ func (k *Executor) Registered(
 		log.Errorf("failed to register/transition to a connected state")
 	}
 
-	if executorInfo != nil && executorInfo.Data != nil {
-		err := k.initializeStaticPodsSource(slaveInfo.GetHostname(), executorInfo.Data)
-		if err != nil {
-			log.Errorf("failed to initialize static pod configuration: %v", err)
-		}
-	}
+	k.initializeStaticPodsSource(executorInfo)
 
 	annotations, err := annotationsFor(executorInfo)
 	if err != nil {
@@ -293,15 +303,17 @@ func (k *Executor) Reregistered(driver bindings.ExecutorDriver, slaveInfo *mesos
 }
 
 // initializeStaticPodsSource unzips the data slice into the static-pods directory
-func (k *Executor) initializeStaticPodsSource(hostname string, data []byte) error {
-	log.V(2).Infof("extracting static pods config to %s", k.staticPodsConfigPath)
-	// annotate the pod with BindingHostKey so that the scheduler will ignore the pod
-	// once it appears in the pod registry. the stock kubelet sets the pod host in order
-	// to accomplish the same; we do this because the k8sm scheduler works differently.
-	annotator := podutil.Annotator(map[string]string{
-		meta.BindingHostKey: hostname,
-	})
-	return podutil.WriteToDir(annotator.Do(podutil.Gunzip(data)), k.staticPodsConfigPath)
+func (k *Executor) initializeStaticPodsSource(executorInfo *mesos.ExecutorInfo) {
+	if data := executorInfo.GetData(); len(data) > 0 && k.staticPodsConfigPath != "" {
+		log.V(2).Infof("extracting static pods config to %s", k.staticPodsConfigPath)
+		err := podutil.WriteToDir(
+			k.staticPodsFilters.Do(podutil.Gunzip(executorInfo.Data)),
+			k.staticPodsConfigPath,
+		)
+		if err != nil {
+			log.Errorf("failed to initialize static pod configuration: %v", err)
+		}
+	}
 }
 
 // Disconnected is called when the executor is disconnected from the slave.
@@ -343,7 +355,7 @@ func (k *Executor) LaunchTask(driver bindings.ExecutorDriver, taskInfo *mesos.Ta
 		return
 	}
 
-	obj, err := api.Codec.Decode(taskInfo.GetData())
+	obj, err := kruntime.Decode(api.Codecs.UniversalDecoder(), taskInfo.GetData())
 	if err != nil {
 		log.Errorf("failed to extract yaml data from the taskInfo.data %v", err)
 		k.sendStatus(driver, newStatus(taskInfo.GetTaskId(), mesos.TaskState_TASK_FAILED,
@@ -478,7 +490,7 @@ func (k *Executor) bindAndWatchTask(driver bindings.ExecutorDriver, task *mesos.
 	// within the launch timeout window we should see a pod-task update via the registry.
 	// if we see a Running update then we need to generate a TASK_RUNNING status update for mesos.
 	handlerFinished := false
-	handler := watchHandler{
+	handler := &watchHandler{
 		expiration: watchExpiration{
 			timeout: launchTimer.C,
 			onEvent: func(taskID string) {
@@ -544,6 +556,9 @@ func (k *Executor) killPodTask(driver bindings.ExecutorDriver, taskID string) {
 	err := k.kubeAPI.killPod(pod.Namespace, pod.Name)
 	if err != nil {
 		log.V(1).Infof("failed to delete task %v pod %v/%v from apiserver: %+v", taskID, pod.Namespace, pod.Name, err)
+		if apierrors.IsNotFound(err) {
+			k.sendStatus(driver, newStatus(&mesos.TaskID{Value: &taskID}, mesos.TaskState_TASK_LOST, "kill-pod-task"))
+		}
 	}
 }
 
@@ -603,7 +618,7 @@ func (k *Executor) doShutdown(driver bindings.ExecutorDriver) {
 
 	if k.shutdownAlert != nil {
 		func() {
-			util.HandleCrash()
+			utilruntime.HandleCrash()
 			k.shutdownAlert()
 		}()
 	}
@@ -642,14 +657,13 @@ func (k *Executor) doShutdown(driver bindings.ExecutorDriver) {
 // Destroy existing k8s containers
 func (k *Executor) killKubeletContainers() {
 	if containers, err := dockertools.GetKubeletDockerContainers(k.dockerClient, true); err == nil {
-		opts := docker.RemoveContainerOptions{
+		opts := dockertypes.ContainerRemoveOptions{
 			RemoveVolumes: true,
 			Force:         true,
 		}
 		for _, container := range containers {
-			opts.ID = container.ID
-			log.V(2).Infof("Removing container: %v", opts.ID)
-			if err := k.dockerClient.RemoveContainer(opts); err != nil {
+			log.V(2).Infof("Removing container: %v", container.ID)
+			if err := k.dockerClient.RemoveContainer(container.ID, opts); err != nil {
 				log.Warning(err)
 			}
 		}

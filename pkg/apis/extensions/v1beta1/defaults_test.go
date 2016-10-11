@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -31,10 +31,9 @@ import (
 )
 
 func TestSetDefaultDaemonSet(t *testing.T) {
-	defaultIntOrString := intstr.FromInt(1)
 	defaultLabels := map[string]string{"foo": "bar"}
 	period := int64(v1.DefaultTerminationGracePeriodSeconds)
-	defaultTemplate := &v1.PodTemplateSpec{
+	defaultTemplate := v1.PodTemplateSpec{
 		Spec: v1.PodSpec{
 			DNSPolicy:                     v1.DNSClusterFirst,
 			RestartPolicy:                 v1.RestartPolicyAlways,
@@ -43,6 +42,14 @@ func TestSetDefaultDaemonSet(t *testing.T) {
 		},
 		ObjectMeta: v1.ObjectMeta{
 			Labels: defaultLabels,
+		},
+	}
+	templateNoLabel := v1.PodTemplateSpec{
+		Spec: v1.PodSpec{
+			DNSPolicy:                     v1.DNSClusterFirst,
+			RestartPolicy:                 v1.RestartPolicyAlways,
+			SecurityContext:               &v1.PodSecurityContext{},
+			TerminationGracePeriodSeconds: &period,
 		},
 	}
 	tests := []struct {
@@ -64,13 +71,6 @@ func TestSetDefaultDaemonSet(t *testing.T) {
 						MatchLabels: defaultLabels,
 					},
 					Template: defaultTemplate,
-					UpdateStrategy: DaemonSetUpdateStrategy{
-						Type: RollingUpdateDaemonSetStrategyType,
-						RollingUpdate: &RollingUpdateDaemonSet{
-							MaxUnavailable: &defaultIntOrString,
-						},
-					},
-					UniqueLabelKey: newString(DefaultDaemonSetUniqueLabelKey),
 				},
 			},
 		},
@@ -83,12 +83,6 @@ func TestSetDefaultDaemonSet(t *testing.T) {
 				},
 				Spec: DaemonSetSpec{
 					Template: defaultTemplate,
-					UpdateStrategy: DaemonSetUpdateStrategy{
-						Type: RollingUpdateDaemonSetStrategyType,
-						RollingUpdate: &RollingUpdateDaemonSet{
-							MaxUnavailable: &defaultIntOrString,
-						},
-					},
 				},
 			},
 			expected: &DaemonSet{
@@ -102,13 +96,6 @@ func TestSetDefaultDaemonSet(t *testing.T) {
 						MatchLabels: defaultLabels,
 					},
 					Template: defaultTemplate,
-					UpdateStrategy: DaemonSetUpdateStrategy{
-						Type: RollingUpdateDaemonSetStrategyType,
-						RollingUpdate: &RollingUpdateDaemonSet{
-							MaxUnavailable: &defaultIntOrString,
-						},
-					},
-					UniqueLabelKey: newString(DefaultDaemonSetUniqueLabelKey),
 				},
 			},
 		},
@@ -116,54 +103,27 @@ func TestSetDefaultDaemonSet(t *testing.T) {
 			original: &DaemonSet{},
 			expected: &DaemonSet{
 				Spec: DaemonSetSpec{
-					UpdateStrategy: DaemonSetUpdateStrategy{
-						Type: RollingUpdateDaemonSetStrategyType,
-						RollingUpdate: &RollingUpdateDaemonSet{
-							MaxUnavailable: &defaultIntOrString,
-						},
-					},
-					UniqueLabelKey: newString(DefaultDaemonSetUniqueLabelKey),
+					Template: templateNoLabel,
 				},
 			},
 		},
 		{ // Update strategy.
 			original: &DaemonSet{
-				Spec: DaemonSetSpec{
-					UpdateStrategy: DaemonSetUpdateStrategy{
-						RollingUpdate: &RollingUpdateDaemonSet{},
-					},
-				},
+				Spec: DaemonSetSpec{},
 			},
 			expected: &DaemonSet{
 				Spec: DaemonSetSpec{
-					UpdateStrategy: DaemonSetUpdateStrategy{
-						Type: RollingUpdateDaemonSetStrategyType,
-						RollingUpdate: &RollingUpdateDaemonSet{
-							MaxUnavailable: &defaultIntOrString,
-						},
-					},
-					UniqueLabelKey: newString(DefaultDaemonSetUniqueLabelKey),
+					Template: templateNoLabel,
 				},
 			},
 		},
 		{ // Custom unique label key.
 			original: &DaemonSet{
-				Spec: DaemonSetSpec{
-					UpdateStrategy: DaemonSetUpdateStrategy{
-						RollingUpdate: &RollingUpdateDaemonSet{},
-					},
-					UniqueLabelKey: newString("customDaemonSetKey"),
-				},
+				Spec: DaemonSetSpec{},
 			},
 			expected: &DaemonSet{
 				Spec: DaemonSetSpec{
-					UpdateStrategy: DaemonSetUpdateStrategy{
-						Type: RollingUpdateDaemonSetStrategyType,
-						RollingUpdate: &RollingUpdateDaemonSet{
-							MaxUnavailable: &defaultIntOrString,
-						},
-					},
-					UniqueLabelKey: newString("customDaemonSetKey"),
+					Template: templateNoLabel,
 				},
 			},
 		},
@@ -187,7 +147,6 @@ func TestSetDefaultDaemonSet(t *testing.T) {
 func TestSetDefaultDeployment(t *testing.T) {
 	defaultIntOrString := intstr.FromInt(1)
 	differentIntOrString := intstr.FromInt(5)
-	deploymentLabelKey := DefaultDeploymentUniqueLabelKey
 	period := int64(v1.DefaultTerminationGracePeriodSeconds)
 	defaultTemplate := v1.PodTemplateSpec{
 		Spec: v1.PodSpec{
@@ -213,8 +172,7 @@ func TestSetDefaultDeployment(t *testing.T) {
 							MaxUnavailable: &defaultIntOrString,
 						},
 					},
-					Template:       defaultTemplate,
-					UniqueLabelKey: newString(deploymentLabelKey),
+					Template: defaultTemplate,
 				},
 			},
 		},
@@ -239,8 +197,31 @@ func TestSetDefaultDeployment(t *testing.T) {
 							MaxUnavailable: &defaultIntOrString,
 						},
 					},
-					Template:       defaultTemplate,
-					UniqueLabelKey: newString(deploymentLabelKey),
+					Template: defaultTemplate,
+				},
+			},
+		},
+		{
+			original: &Deployment{
+				Spec: DeploymentSpec{
+					Replicas: newInt32(3),
+					Strategy: DeploymentStrategy{
+						Type:          RollingUpdateDeploymentStrategyType,
+						RollingUpdate: nil,
+					},
+				},
+			},
+			expected: &Deployment{
+				Spec: DeploymentSpec{
+					Replicas: newInt32(3),
+					Strategy: DeploymentStrategy{
+						Type: RollingUpdateDeploymentStrategyType,
+						RollingUpdate: &RollingUpdateDeployment{
+							MaxSurge:       &defaultIntOrString,
+							MaxUnavailable: &defaultIntOrString,
+						},
+					},
+					Template: defaultTemplate,
 				},
 			},
 		},
@@ -259,8 +240,7 @@ func TestSetDefaultDeployment(t *testing.T) {
 					Strategy: DeploymentStrategy{
 						Type: RecreateDeploymentStrategyType,
 					},
-					Template:       defaultTemplate,
-					UniqueLabelKey: newString(deploymentLabelKey),
+					Template: defaultTemplate,
 				},
 			},
 		},
@@ -271,7 +251,6 @@ func TestSetDefaultDeployment(t *testing.T) {
 					Strategy: DeploymentStrategy{
 						Type: RecreateDeploymentStrategyType,
 					},
-					UniqueLabelKey: newString("customDeploymentKey"),
 				},
 			},
 			expected: &Deployment{
@@ -280,8 +259,7 @@ func TestSetDefaultDeployment(t *testing.T) {
 					Strategy: DeploymentStrategy{
 						Type: RecreateDeploymentStrategyType,
 					},
-					Template:       defaultTemplate,
-					UniqueLabelKey: newString("customDeploymentKey"),
+					Template: defaultTemplate,
 				},
 			},
 		},
@@ -302,74 +280,225 @@ func TestSetDefaultDeployment(t *testing.T) {
 	}
 }
 
-func TestSetDefaultJob(t *testing.T) {
-	expected := &Job{
-		Spec: JobSpec{
-			Selector: &LabelSelector{
-				MatchLabels: map[string]string{"job": "selector"},
-			},
-			Completions: newInt32(1),
-			Parallelism: newInt32(1),
-		},
-	}
-	tests := []*Job{
-		// selector set explicitly, completions and parallelism - default
+func TestSetDefaultJobParallelismAndCompletions(t *testing.T) {
+	tests := []struct {
+		original *Job
+		expected *Job
+	}{
+		// both unspecified -> sets both to 1
 		{
-			Spec: JobSpec{
-				Selector: &LabelSelector{
-					MatchLabels: map[string]string{"job": "selector"},
+			original: &Job{
+				Spec: JobSpec{},
+			},
+			expected: &Job{
+				Spec: JobSpec{
+					Completions: newInt32(1),
+					Parallelism: newInt32(1),
 				},
 			},
 		},
-		// selector from template labels, completions and parallelism - default
+		// WQ: Parallelism explicitly 0 and completions unset -> no change
 		{
-			Spec: JobSpec{
-				Template: v1.PodTemplateSpec{
-					ObjectMeta: v1.ObjectMeta{
-						Labels: map[string]string{"job": "selector"},
-					},
+			original: &Job{
+				Spec: JobSpec{
+					Parallelism: newInt32(0),
+				},
+			},
+			expected: &Job{
+				Spec: JobSpec{
+					Parallelism: newInt32(0),
 				},
 			},
 		},
-		// selector from template labels, completions set explicitly, parallelism - default
+		// WQ: Parallelism explicitly 2 and completions unset -> no change
 		{
-			Spec: JobSpec{
-				Completions: newInt32(1),
-				Template: v1.PodTemplateSpec{
-					ObjectMeta: v1.ObjectMeta{
-						Labels: map[string]string{"job": "selector"},
-					},
+			original: &Job{
+				Spec: JobSpec{
+					Parallelism: newInt32(2),
+				},
+			},
+			expected: &Job{
+				Spec: JobSpec{
+					Parallelism: newInt32(2),
 				},
 			},
 		},
-		// selector from template labels, completions - default, parallelism set explicitly
+		// Completions explicitly 2 and parallelism unset -> parallelism is defaulted
 		{
-			Spec: JobSpec{
-				Parallelism: newInt32(1),
-				Template: v1.PodTemplateSpec{
-					ObjectMeta: v1.ObjectMeta{
-						Labels: map[string]string{"job": "selector"},
-					},
+			original: &Job{
+				Spec: JobSpec{
+					Completions: newInt32(2),
+				},
+			},
+			expected: &Job{
+				Spec: JobSpec{
+					Completions: newInt32(2),
+					Parallelism: newInt32(1),
+				},
+			},
+		},
+		// Both set -> no change
+		{
+			original: &Job{
+				Spec: JobSpec{
+					Completions: newInt32(10),
+					Parallelism: newInt32(11),
+				},
+			},
+			expected: &Job{
+				Spec: JobSpec{
+					Completions: newInt32(10),
+					Parallelism: newInt32(11),
+				},
+			},
+		},
+		// Both set, flipped -> no change
+		{
+			original: &Job{
+				Spec: JobSpec{
+					Completions: newInt32(11),
+					Parallelism: newInt32(10),
+				},
+			},
+			expected: &Job{
+				Spec: JobSpec{
+					Completions: newInt32(11),
+					Parallelism: newInt32(10),
 				},
 			},
 		},
 	}
 
-	for _, original := range tests {
+	for _, tc := range tests {
+		original := tc.original
+		expected := tc.expected
 		obj2 := roundTrip(t, runtime.Object(original))
 		got, ok := obj2.(*Job)
 		if !ok {
 			t.Errorf("unexpected object: %v", got)
 			t.FailNow()
 		}
-		if *got.Spec.Completions != *expected.Spec.Completions {
-			t.Errorf("got different completions than expected: %d %d", *got.Spec.Completions, *expected.Spec.Completions)
+		if (got.Spec.Completions == nil) != (expected.Spec.Completions == nil) {
+			t.Errorf("got different *completions than expected: %v %v", got.Spec.Completions, expected.Spec.Completions)
 		}
-		if *got.Spec.Parallelism != *expected.Spec.Parallelism {
-			t.Errorf("got different parallelism than expected: %d %d", *got.Spec.Parallelism, *expected.Spec.Parallelism)
+		if got.Spec.Completions != nil && expected.Spec.Completions != nil {
+			if *got.Spec.Completions != *expected.Spec.Completions {
+				t.Errorf("got different completions than expected: %d %d", *got.Spec.Completions, *expected.Spec.Completions)
+			}
 		}
-		if !reflect.DeepEqual(got.Spec.Selector, expected.Spec.Selector) {
-			t.Errorf("got different selectors %#v %#v", got.Spec.Selector, expected.Spec.Selector)
+		if (got.Spec.Parallelism == nil) != (expected.Spec.Parallelism == nil) {
+			t.Errorf("got different *Parallelism than expected: %v %v", got.Spec.Parallelism, expected.Spec.Parallelism)
+		}
+		if got.Spec.Parallelism != nil && expected.Spec.Parallelism != nil {
+			if *got.Spec.Parallelism != *expected.Spec.Parallelism {
+				t.Errorf("got different parallelism than expected: %d %d", *got.Spec.Parallelism, *expected.Spec.Parallelism)
+			}
+		}
+	}
+}
+
+func TestSetDefaultJobSelector(t *testing.T) {
+	tests := []struct {
+		original         *Job
+		expectedSelector *LabelSelector
+	}{
+		// selector set explicitly, nil autoSelector
+		{
+			original: &Job{
+				Spec: JobSpec{
+					Selector: &LabelSelector{
+						MatchLabels: map[string]string{"job": "selector"},
+					},
+				},
+			},
+			expectedSelector: &LabelSelector{
+				MatchLabels: map[string]string{"job": "selector"},
+			},
+		},
+		// selector set explicitly, autoSelector=true
+		{
+			original: &Job{
+				Spec: JobSpec{
+					Selector: &LabelSelector{
+						MatchLabels: map[string]string{"job": "selector"},
+					},
+					AutoSelector: newBool(true),
+				},
+			},
+			expectedSelector: &LabelSelector{
+				MatchLabels: map[string]string{"job": "selector"},
+			},
+		},
+		// selector set explicitly, autoSelector=false
+		{
+			original: &Job{
+				Spec: JobSpec{
+					Selector: &LabelSelector{
+						MatchLabels: map[string]string{"job": "selector"},
+					},
+					AutoSelector: newBool(false),
+				},
+			},
+			expectedSelector: &LabelSelector{
+				MatchLabels: map[string]string{"job": "selector"},
+			},
+		},
+		// selector from template labels
+		{
+			original: &Job{
+				Spec: JobSpec{
+					Template: v1.PodTemplateSpec{
+						ObjectMeta: v1.ObjectMeta{
+							Labels: map[string]string{"job": "selector"},
+						},
+					},
+				},
+			},
+			expectedSelector: &LabelSelector{
+				MatchLabels: map[string]string{"job": "selector"},
+			},
+		},
+		// selector from template labels, autoSelector=false
+		{
+			original: &Job{
+				Spec: JobSpec{
+					Template: v1.PodTemplateSpec{
+						ObjectMeta: v1.ObjectMeta{
+							Labels: map[string]string{"job": "selector"},
+						},
+					},
+					AutoSelector: newBool(false),
+				},
+			},
+			expectedSelector: &LabelSelector{
+				MatchLabels: map[string]string{"job": "selector"},
+			},
+		},
+		// selector not copied from template labels, autoSelector=true
+		{
+			original: &Job{
+				Spec: JobSpec{
+					Template: v1.PodTemplateSpec{
+						ObjectMeta: v1.ObjectMeta{
+							Labels: map[string]string{"job": "selector"},
+						},
+					},
+					AutoSelector: newBool(true),
+				},
+			},
+			expectedSelector: nil,
+		},
+	}
+
+	for i, testcase := range tests {
+		obj2 := roundTrip(t, runtime.Object(testcase.original))
+		got, ok := obj2.(*Job)
+		if !ok {
+			t.Errorf("%d: unexpected object: %v", i, got)
+			t.FailNow()
+		}
+		if !reflect.DeepEqual(got.Spec.Selector, testcase.expectedSelector) {
+			t.Errorf("%d: got different selectors %#v %#v", i, got.Spec.Selector, testcase.expectedSelector)
 		}
 	}
 }
@@ -383,7 +512,7 @@ func TestSetDefaultReplicaSet(t *testing.T) {
 		{
 			rs: &ReplicaSet{
 				Spec: ReplicaSetSpec{
-					Template: &v1.PodTemplateSpec{
+					Template: v1.PodTemplateSpec{
 						ObjectMeta: v1.ObjectMeta{
 							Labels: map[string]string{
 								"foo": "bar",
@@ -403,7 +532,7 @@ func TestSetDefaultReplicaSet(t *testing.T) {
 					},
 				},
 				Spec: ReplicaSetSpec{
-					Template: &v1.PodTemplateSpec{
+					Template: v1.PodTemplateSpec{
 						ObjectMeta: v1.ObjectMeta{
 							Labels: map[string]string{
 								"foo": "bar",
@@ -428,7 +557,7 @@ func TestSetDefaultReplicaSet(t *testing.T) {
 							"some": "other",
 						},
 					},
-					Template: &v1.PodTemplateSpec{
+					Template: v1.PodTemplateSpec{
 						ObjectMeta: v1.ObjectMeta{
 							Labels: map[string]string{
 								"foo": "bar",
@@ -448,7 +577,7 @@ func TestSetDefaultReplicaSet(t *testing.T) {
 							"some": "other",
 						},
 					},
-					Template: &v1.PodTemplateSpec{
+					Template: v1.PodTemplateSpec{
 						ObjectMeta: v1.ObjectMeta{
 							Labels: map[string]string{
 								"foo": "bar",
@@ -495,7 +624,7 @@ func TestSetDefaultReplicaSetReplicas(t *testing.T) {
 		{
 			rs: ReplicaSet{
 				Spec: ReplicaSetSpec{
-					Template: &v1.PodTemplateSpec{
+					Template: v1.PodTemplateSpec{
 						ObjectMeta: v1.ObjectMeta{
 							Labels: map[string]string{
 								"foo": "bar",
@@ -510,7 +639,7 @@ func TestSetDefaultReplicaSetReplicas(t *testing.T) {
 			rs: ReplicaSet{
 				Spec: ReplicaSetSpec{
 					Replicas: newInt32(0),
-					Template: &v1.PodTemplateSpec{
+					Template: v1.PodTemplateSpec{
 						ObjectMeta: v1.ObjectMeta{
 							Labels: map[string]string{
 								"foo": "bar",
@@ -525,7 +654,7 @@ func TestSetDefaultReplicaSetReplicas(t *testing.T) {
 			rs: ReplicaSet{
 				Spec: ReplicaSetSpec{
 					Replicas: newInt32(3),
-					Template: &v1.PodTemplateSpec{
+					Template: v1.PodTemplateSpec{
 						ObjectMeta: v1.ObjectMeta{
 							Labels: map[string]string{
 								"foo": "bar",
@@ -568,7 +697,7 @@ func TestDefaultRequestIsNotSetForReplicaSet(t *testing.T) {
 	rs := &ReplicaSet{
 		Spec: ReplicaSetSpec{
 			Replicas: newInt32(3),
-			Template: &v1.PodTemplateSpec{
+			Template: v1.PodTemplateSpec{
 				ObjectMeta: v1.ObjectMeta{
 					Labels: map[string]string{
 						"foo": "bar",
@@ -588,18 +717,18 @@ func TestDefaultRequestIsNotSetForReplicaSet(t *testing.T) {
 }
 
 func roundTrip(t *testing.T, obj runtime.Object) runtime.Object {
-	data, err := runtime.Encode(Codec, obj)
+	data, err := runtime.Encode(api.Codecs.LegacyCodec(SchemeGroupVersion), obj)
 	if err != nil {
 		t.Errorf("%v\n %#v", err, obj)
 		return nil
 	}
-	obj2, err := api.Codec.Decode(data)
+	obj2, err := runtime.Decode(api.Codecs.UniversalDecoder(), data)
 	if err != nil {
 		t.Errorf("%v\nData: %s\nSource: %#v", err, string(data), obj)
 		return nil
 	}
 	obj3 := reflect.New(reflect.TypeOf(obj).Elem()).Interface().(runtime.Object)
-	err = api.Scheme.Convert(obj2, obj3)
+	err = api.Scheme.Convert(obj2, obj3, nil)
 	if err != nil {
 		t.Errorf("%v\nSource: %#v", err, obj2)
 		return nil
@@ -617,4 +746,10 @@ func newString(val string) *string {
 	p := new(string)
 	*p = val
 	return p
+}
+
+func newBool(val bool) *bool {
+	b := new(bool)
+	*b = val
+	return b
 }

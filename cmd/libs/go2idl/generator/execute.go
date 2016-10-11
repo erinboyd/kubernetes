@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,13 +22,14 @@ import (
 	"go/format"
 	"io"
 	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"k8s.io/kubernetes/cmd/libs/go2idl/namer"
 	"k8s.io/kubernetes/cmd/libs/go2idl/types"
+
+	"github.com/golang/glog"
 )
 
 func errs2strings(errors []error) []string {
@@ -57,10 +58,13 @@ func (c *Context) ExecutePackages(outDir string, packages Packages) error {
 	return nil
 }
 
-type golangFileType struct{}
+type DefaultFileType struct {
+	Format   func([]byte) ([]byte, error)
+	Assemble func(io.Writer, *File)
+}
 
-func (ft golangFileType) AssembleFile(f *File, pathname string) error {
-	log.Printf("Assembling file %q", pathname)
+func (ft DefaultFileType) AssembleFile(f *File, pathname string) error {
+	glog.V(2).Infof("Assembling file %q", pathname)
 	destFile, err := os.Create(pathname)
 	if err != nil {
 		return err
@@ -69,12 +73,12 @@ func (ft golangFileType) AssembleFile(f *File, pathname string) error {
 
 	b := &bytes.Buffer{}
 	et := NewErrorTracker(b)
-	ft.assemble(et, f)
+	ft.Assemble(et, f)
 	if et.Error() != nil {
 		return et.Error()
 	}
-	if formatted, err := format.Source(b.Bytes()); err != nil {
-		err = fmt.Errorf("unable to run gofmt on %q (%v).", pathname, err)
+	if formatted, err := ft.Format(b.Bytes()); err != nil {
+		err = fmt.Errorf("unable to format file %q (%v).", pathname, err)
 		// Write the file anyway, so they can see what's going wrong and fix the generator.
 		if _, err2 := destFile.Write(b.Bytes()); err2 != nil {
 			return err2
@@ -86,18 +90,18 @@ func (ft golangFileType) AssembleFile(f *File, pathname string) error {
 	}
 }
 
-func (ft golangFileType) VerifyFile(f *File, pathname string) error {
-	log.Printf("Verifying file %q", pathname)
+func (ft DefaultFileType) VerifyFile(f *File, pathname string) error {
+	glog.V(2).Infof("Verifying file %q", pathname)
 	friendlyName := filepath.Join(f.PackageName, f.Name)
 	b := &bytes.Buffer{}
 	et := NewErrorTracker(b)
-	ft.assemble(et, f)
+	ft.Assemble(et, f)
 	if et.Error() != nil {
 		return et.Error()
 	}
-	formatted, err := format.Source(b.Bytes())
+	formatted, err := ft.Format(b.Bytes())
 	if err != nil {
-		return fmt.Errorf("unable to gofmt the output for %q: %v", friendlyName, err)
+		return fmt.Errorf("unable to format the output for %q: %v", friendlyName, err)
 	}
 	existing, err := ioutil.ReadFile(pathname)
 	if err != nil {
@@ -121,7 +125,7 @@ func (ft golangFileType) VerifyFile(f *File, pathname string) error {
 	return fmt.Errorf("output for %q differs; first existing/expected diff: \n  %q\n  %q", friendlyName, string(eDiff), string(fDiff))
 }
 
-func (ft golangFileType) assemble(w io.Writer, f *File) {
+func assembleGolangFile(w io.Writer, f *File) {
 	w.Write(f.Header)
 	fmt.Fprintf(w, "package %v\n\n", f.PackageName)
 
@@ -153,6 +157,13 @@ func (ft golangFileType) assemble(w io.Writer, f *File) {
 	}
 
 	w.Write(f.Body.Bytes())
+}
+
+func NewGolangFile() *DefaultFileType {
+	return &DefaultFileType{
+		Format:   format.Source,
+		Assemble: assembleGolangFile,
+	}
 }
 
 // format should be one line only, and not end with \n.
@@ -200,7 +211,7 @@ func (c *Context) addNameSystems(namers namer.NameSystems) *Context {
 // import path already, this will be appended to 'outDir'.
 func (c *Context) ExecutePackage(outDir string, p Package) error {
 	path := filepath.Join(outDir, p.Path())
-	log.Printf("Processing package %q, disk location %q", p.Name(), path)
+	glog.V(2).Infof("Processing package %q, disk location %q", p.Name(), path)
 	// Filter out any types the *package* doesn't care about.
 	packageContext := c.filteredBy(p.Filter)
 	os.MkdirAll(path, 0755)
@@ -276,7 +287,7 @@ func (c *Context) ExecutePackage(outDir string, p Package) error {
 		}
 	}
 	if len(errors) > 0 {
-		return fmt.Errorf("errors in package %q:\n%v\n", p.Name(), strings.Join(errs2strings(errors), "\n"))
+		return fmt.Errorf("errors in package %q:\n%v\n", p.Path(), strings.Join(errs2strings(errors), "\n"))
 	}
 	return nil
 }

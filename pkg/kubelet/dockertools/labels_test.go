@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,9 +22,10 @@ import (
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apimachinery/registered"
+	"k8s.io/kubernetes/pkg/api/testapi"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/util/format"
+	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/intstr"
 )
 
@@ -49,9 +50,24 @@ func TestLabels(t *testing.T) {
 			},
 		},
 	}
+	containerPorts := []api.ContainerPort{
+		{
+			Name:          "http",
+			HostPort:      80,
+			ContainerPort: 8080,
+			Protocol:      api.ProtocolTCP,
+		},
+		{
+			Name:          "https",
+			HostPort:      443,
+			ContainerPort: 6443,
+			Protocol:      api.ProtocolTCP,
+		},
+	}
 	container := &api.Container{
-		Name: "test_container",
-		TerminationMessagePath: "/tmp",
+		Name:  "test_container",
+		Ports: containerPorts,
+		TerminationMessagePath: "/somepath",
 		Lifecycle:              lifecycle,
 	}
 	pod := &api.Pod{
@@ -77,10 +93,11 @@ func TestLabels(t *testing.T) {
 		RestartCount:           restartCount,
 		TerminationMessagePath: container.TerminationMessagePath,
 		PreStopHandler:         container.Lifecycle.PreStop,
+		Ports:                  containerPorts,
 	}
 
 	// Test whether we can get right information from label
-	labels := newLabels(container, pod, restartCount)
+	labels := newLabels(container, pod, restartCount, false)
 	containerInfo := getContainerInfoFromLabel(labels)
 	if !reflect.DeepEqual(containerInfo, expected) {
 		t.Errorf("expected %v, got %v", expected, containerInfo)
@@ -96,7 +113,7 @@ func TestLabels(t *testing.T) {
 	expected.PreStopHandler = nil
 	// Because container is changed, the Hash should be updated
 	expected.Hash = strconv.FormatUint(kubecontainer.HashContainer(container), 16)
-	labels = newLabels(container, pod, restartCount)
+	labels = newLabels(container, pod, restartCount, false)
 	containerInfo = getContainerInfoFromLabel(labels)
 	if !reflect.DeepEqual(containerInfo, expected) {
 		t.Errorf("expected %v, got %v", expected, containerInfo)
@@ -107,7 +124,7 @@ func TestLabels(t *testing.T) {
 	pod.DeletionGracePeriodSeconds = &deletionGracePeriod
 	pod.Spec.TerminationGracePeriodSeconds = &terminationGracePeriod
 	container.Lifecycle = lifecycle
-	data, err := registered.GroupOrDie(api.GroupName).Codec.Encode(pod)
+	data, err := runtime.Encode(testapi.Default.Codec(), pod)
 	if err != nil {
 		t.Fatalf("Failed to encode pod %q into string: %v", format.Pod(pod), err)
 	}

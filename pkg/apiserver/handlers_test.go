@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -66,17 +66,18 @@ func pathWithPrefix(prefix, resource, namespace, name string) string {
 //   hanging for the long time,
 // - "short" requests are correctly accounted, i.e. there can be only size of channel passed to the
 //   constructor in flight at any given moment,
-// - subsequent "short" requests are rejected instantly with apropriate error,
+// - subsequent "short" requests are rejected instantly with appropriate error,
 // - subsequent "long" requests are handled normally,
 // - we correctly recover after some "short" requests finish, i.e. we can process new ones.
 func TestMaxInFlight(t *testing.T) {
 	const AllowedInflightRequestsNo = 3
-	// Size of inflightRequestsChannel determines how many concurent inflight requests
+	// Size of inflightRequestsChannel determines how many concurrent inflight requests
 	// are allowed.
 	inflightRequestsChannel := make(chan bool, AllowedInflightRequestsNo)
 	// notAccountedPathsRegexp specifies paths requests to which we don't account into
 	// requests in flight.
 	notAccountedPathsRegexp := regexp.MustCompile(".*\\/watch")
+	longRunningRequestCheck := BasicLongRunningRequestCheck(notAccountedPathsRegexp, map[string]string{"watch": "true"})
 
 	// Calls is used to wait until all server calls are received. We are sending
 	// AllowedInflightRequestsNo of 'long' not-accounted requests and the same number of
@@ -98,7 +99,7 @@ func TestMaxInFlight(t *testing.T) {
 	server := httptest.NewServer(
 		MaxInFlightLimit(
 			inflightRequestsChannel,
-			notAccountedPathsRegexp,
+			longRunningRequestCheck,
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// A short, accounted request that does not wait for block WaitGroup.
 				if strings.Contains(r.URL.Path, "dontwait") {
@@ -111,14 +112,13 @@ func TestMaxInFlight(t *testing.T) {
 			}),
 		),
 	)
-	// TODO: Uncomment when fix #19254
-	// defer server.Close()
+	defer server.Close()
 
-	// These should hang, but not affect accounting.
+	// These should hang, but not affect accounting.  use a query param match
 	for i := 0; i < AllowedInflightRequestsNo; i++ {
 		// These should hang waiting on block...
 		go func() {
-			if err := expectHTTP(server.URL+"/foo/bar/watch", http.StatusOK); err != nil {
+			if err := expectHTTP(server.URL+"/foo/bar?watch=true", http.StatusOK); err != nil {
 				t.Error(err)
 			}
 			responses.Done()
@@ -150,7 +150,7 @@ func TestMaxInFlight(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	// Validate that non-accounted URLs still work
+	// Validate that non-accounted URLs still work.  use a path regex match
 	if err := expectHTTP(server.URL+"/dontwait/watch", http.StatusOK); err != nil {
 		t.Error(err)
 	}
@@ -174,8 +174,7 @@ func TestReadOnly(t *testing.T) {
 			}
 		},
 	)))
-	// TODO: Uncomment when fix #19254
-	// defer server.Close()
+	defer server.Close()
 	for _, verb := range []string{"GET", "POST", "PUT", "DELETE", "CREATE"} {
 		req, err := http.NewRequest(verb, server.URL, nil)
 		if err != nil {
@@ -201,8 +200,7 @@ func TestTimeout(t *testing.T) {
 		func(*http.Request) (<-chan time.Time, string) {
 			return timeout, timeoutResp
 		}))
-	// TODO: Uncomment when fix #19254
-	// defer ts.Close()
+	defer ts.Close()
 
 	// No timeouts
 	sendResponse <- struct{}{}
@@ -283,6 +281,8 @@ func TestGetAttribs(t *testing.T) {
 				Path:            "/api/v1/nodes/mynode",
 				ResourceRequest: true,
 				Resource:        "nodes",
+				APIVersion:      "v1",
+				Name:            "mynode",
 			},
 		},
 		"namespaced resource": {
@@ -294,6 +294,8 @@ func TestGetAttribs(t *testing.T) {
 				ResourceRequest: true,
 				Namespace:       "myns",
 				Resource:        "pods",
+				APIVersion:      "v1",
+				Name:            "mypod",
 			},
 		},
 		"API group resource": {
@@ -304,6 +306,7 @@ func TestGetAttribs(t *testing.T) {
 				Path:            "/apis/extensions/v1beta1/namespaces/myns/jobs",
 				ResourceRequest: true,
 				APIGroup:        extensions.GroupName,
+				APIVersion:      "v1beta1",
 				Namespace:       "myns",
 				Resource:        "jobs",
 			},
@@ -357,12 +360,19 @@ func TestGetAPIRequestInfo(t *testing.T) {
 		// subresource identification
 		{"GET", "/api/v1/namespaces/other/pods/foo/status", "get", "api", "", "v1", "other", "pods", "status", "foo", []string{"pods", "foo", "status"}},
 		{"GET", "/api/v1/namespaces/other/pods/foo/proxy/subpath", "get", "api", "", "v1", "other", "pods", "proxy", "foo", []string{"pods", "foo", "proxy", "subpath"}},
-		{"PUT", "/api/v1/namespaces/other/finalize", "update", "api", "", "v1", "other", "finalize", "", "", []string{"finalize"}},
+		{"PUT", "/api/v1/namespaces/other/finalize", "update", "api", "", "v1", "other", "namespaces", "finalize", "other", []string{"namespaces", "other", "finalize"}},
+		{"PUT", "/api/v1/namespaces/other/status", "update", "api", "", "v1", "other", "namespaces", "status", "other", []string{"namespaces", "other", "status"}},
 
 		// verb identification
 		{"PATCH", "/api/v1/namespaces/other/pods/foo", "patch", "api", "", "v1", "other", "pods", "", "foo", []string{"pods", "foo"}},
 		{"DELETE", "/api/v1/namespaces/other/pods/foo", "delete", "api", "", "v1", "other", "pods", "", "foo", []string{"pods", "foo"}},
 		{"POST", "/api/v1/namespaces/other/pods", "create", "api", "", "v1", "other", "pods", "", "", []string{"pods"}},
+
+		// deletecollection verb identification
+		{"DELETE", "/api/v1/nodes", "deletecollection", "api", "", "v1", "", "nodes", "", "", []string{"nodes"}},
+		{"DELETE", "/api/v1/namespaces", "deletecollection", "api", "", "v1", "", "namespaces", "", "", []string{"namespaces"}},
+		{"DELETE", "/api/v1/namespaces/other/pods", "deletecollection", "api", "", "v1", "other", "pods", "", "", []string{"pods"}},
+		{"DELETE", "/apis/extensions/v1/namespaces/other/pods", "deletecollection", "api", "extensions", "v1", "other", "pods", "", "", []string{"pods"}},
 
 		// api group identification
 		{"POST", "/apis/extensions/v1/namespaces/other/pods", "create", "api", "extensions", "v1", "other", "pods", "", "", []string{"pods"}},

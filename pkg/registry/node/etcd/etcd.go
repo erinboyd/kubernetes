@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,58 +24,79 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/kubelet/client"
+	"k8s.io/kubernetes/pkg/registry/cachesize"
 	"k8s.io/kubernetes/pkg/registry/generic"
-	etcdgeneric "k8s.io/kubernetes/pkg/registry/generic/etcd"
+	"k8s.io/kubernetes/pkg/registry/generic/registry"
 	"k8s.io/kubernetes/pkg/registry/node"
+	noderest "k8s.io/kubernetes/pkg/registry/node/rest"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/storage"
 )
 
+// NodeStorage includes storage for nodes and all sub resources
+type NodeStorage struct {
+	Node   *REST
+	Status *StatusREST
+	Proxy  *noderest.ProxyREST
+}
+
 type REST struct {
-	*etcdgeneric.Etcd
+	*registry.Store
 	connection     client.ConnectionInfoGetter
 	proxyTransport http.RoundTripper
 }
 
 // StatusREST implements the REST endpoint for changing the status of a pod.
 type StatusREST struct {
-	store *etcdgeneric.Etcd
+	store *registry.Store
 }
 
 func (r *StatusREST) New() runtime.Object {
 	return &api.Node{}
 }
 
-// Update alters the status subset of an object.
-func (r *StatusREST) Update(ctx api.Context, obj runtime.Object) (runtime.Object, bool, error) {
-	return r.store.Update(ctx, obj)
+// Get retrieves the object from the storage. It is required to support Patch.
+func (r *StatusREST) Get(ctx api.Context, name string) (runtime.Object, error) {
+	return r.store.Get(ctx, name)
 }
 
-// NewREST returns a RESTStorage object that will work against nodes.
-func NewREST(s storage.Interface, storageDecorator generic.StorageDecorator, connection client.ConnectionInfoGetter, proxyTransport http.RoundTripper) (*REST, *StatusREST) {
-	prefix := "/minions"
+// Update alters the status subset of an object.
+func (r *StatusREST) Update(ctx api.Context, name string, objInfo rest.UpdatedObjectInfo) (runtime.Object, bool, error) {
+	return r.store.Update(ctx, name, objInfo)
+}
+
+// NewStorage returns a NodeStorage object that will work against nodes.
+func NewStorage(opts generic.RESTOptions, connection client.ConnectionInfoGetter, proxyTransport http.RoundTripper) NodeStorage {
+	prefix := "/" + opts.ResourcePrefix
 
 	newListFunc := func() runtime.Object { return &api.NodeList{} }
-	storageInterface := storageDecorator(
-		s, 1000, &api.Node{}, prefix, false, newListFunc)
+	storageInterface, _ := opts.Decorator(
+		opts.StorageConfig,
+		cachesize.GetWatchCacheSizeByResource(cachesize.Nodes),
+		&api.Node{},
+		prefix,
+		node.Strategy,
+		newListFunc,
+		node.NodeNameTriggerFunc)
 
-	store := &etcdgeneric.Etcd{
+	store := &registry.Store{
 		NewFunc:     func() runtime.Object { return &api.Node{} },
 		NewListFunc: newListFunc,
 		KeyRootFunc: func(ctx api.Context) string {
 			return prefix
 		},
 		KeyFunc: func(ctx api.Context, name string) (string, error) {
-			return etcdgeneric.NoNamespaceKeyFunc(ctx, prefix, name)
+			return registry.NoNamespaceKeyFunc(ctx, prefix, name)
 		},
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
 			return obj.(*api.Node).Name, nil
 		},
-		PredicateFunc:     node.MatchNode,
-		QualifiedResource: api.Resource("nodes"),
+		PredicateFunc:           node.MatchNode,
+		QualifiedResource:       api.Resource("nodes"),
+		DeleteCollectionWorkers: opts.DeleteCollectionWorkers,
 
 		CreateStrategy: node.Strategy,
 		UpdateStrategy: node.Strategy,
+		DeleteStrategy: node.Strategy,
 		ExportStrategy: node.Strategy,
 
 		Storage: storageInterface,
@@ -84,7 +105,13 @@ func NewREST(s storage.Interface, storageDecorator generic.StorageDecorator, con
 	statusStore := *store
 	statusStore.UpdateStrategy = node.StatusStrategy
 
-	return &REST{store, connection, proxyTransport}, &StatusREST{store: &statusStore}
+	nodeREST := &REST{store, connection, proxyTransport}
+
+	return NodeStorage{
+		Node:   nodeREST,
+		Status: &StatusREST{store: &statusStore},
+		Proxy:  &noderest.ProxyREST{Store: store, Connection: client.ConnectionInfoGetter(nodeREST), ProxyTransport: proxyTransport},
+	}
 }
 
 // Implement Redirector.
@@ -107,7 +134,7 @@ func (r *REST) getKubeletPort(ctx api.Context, nodeName string) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("Unexpected object type: %#v", node)
 	}
-	return node.Status.DaemonEndpoints.KubeletEndpoint.Port, nil
+	return int(node.Status.DaemonEndpoints.KubeletEndpoint.Port), nil
 }
 
 func (c *REST) GetConnectionInfo(ctx api.Context, nodeName string) (string, uint, http.RoundTripper, error) {

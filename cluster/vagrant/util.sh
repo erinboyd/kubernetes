@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 The Kubernetes Authors All rights reserved.
+# Copyright 2014 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -53,6 +53,7 @@ function verify-prereqs {
       prlctl parallels vagrant-parallels
       VBoxManage virtualbox ''
       virsh libvirt vagrant-libvirt
+      '' vsphere vagrant-vsphere
   )
   local provider_found=''
   local provider_bin
@@ -82,7 +83,7 @@ function verify-prereqs {
   done
 
   if [ -z "${provider_found}" ]; then
-    if [ -n "${VAGRANT_DEFAULT_PROVIDER}" ]; then
+    if [ -n "${VAGRANT_DEFAULT_PROVIDER:-}" ]; then
       echo "Can't find the necessary components for the ${VAGRANT_DEFAULT_PROVIDER} vagrant provider."
       echo "Possible reasons could be: "
       echo -e "\t- vmrun utility is not in your path"
@@ -153,6 +154,7 @@ function echo-kube-env() {
   echo "NODE_NAMES=(${NODE_NAMES[@]})"
   echo "NODE_IPS=(${NODE_IPS[@]})"
   echo "CONTAINER_SUBNET='${CONTAINER_SUBNET}'"
+  echo "CLUSTER_IP_RANGE='${CLUSTER_IP_RANGE}'"
   echo "MASTER_CONTAINER_SUBNET='${MASTER_CONTAINER_SUBNET}'"
   echo "NODE_CONTAINER_NETMASKS='${NODE_CONTAINER_NETMASKS[@]}'"
   echo "NODE_CONTAINER_SUBNETS=(${NODE_CONTAINER_SUBNETS[@]})"
@@ -161,6 +163,7 @@ function echo-kube-env() {
   echo "MASTER_PASSWD='${MASTER_PASSWD}'"
   echo "KUBE_USER='${KUBE_USER}'"
   echo "KUBE_PASSWORD='${KUBE_PASSWORD}'"
+  echo "KUBE_BEARER_TOKEN='${KUBE_BEARER_TOKEN}'"
   echo "ENABLE_CLUSTER_MONITORING='${ENABLE_CLUSTER_MONITORING}'"
   echo "ENABLE_CLUSTER_LOGGING='${ENABLE_CLUSTER_LOGGING:-false}'"
   echo "ELASTICSEARCH_LOGGING_REPLICAS='${ELASTICSEARCH_LOGGING_REPLICAS:-1}'"
@@ -184,6 +187,8 @@ function echo-kube-env() {
   echo "OPENCONTRAIL_KUBERNETES_TAG='${OPENCONTRAIL_KUBERNETES_TAG:-}'"
   echo "OPENCONTRAIL_PUBLIC_SUBNET='${OPENCONTRAIL_PUBLIC_SUBNET:-}'"
   echo "E2E_STORAGE_TEST_ENVIRONMENT='${E2E_STORAGE_TEST_ENVIRONMENT:-}'"
+  echo "CUSTOM_FEDORA_REPOSITORY_URL='${CUSTOM_FEDORA_REPOSITORY_URL:-}'"
+  echo "EVICTION_HARD='${EVICTION_HARD:-}'"
 }
 
 function verify-cluster {
@@ -253,6 +258,7 @@ function verify-cluster {
   (
     # ensures KUBECONFIG is set
     get-kubeconfig-basicauth
+    get-kubeconfig-bearertoken
     echo
     echo "Kubernetes cluster is running."
     echo
@@ -274,6 +280,7 @@ function verify-cluster {
 # Instantiate a kubernetes cluster
 function kube-up {
   load-or-gen-kube-basicauth
+  load-or-gen-kube-bearertoken
   get-tokens
   create-provision-scripts
 
@@ -290,7 +297,10 @@ function kube-up {
    vagrant ssh master -- sudo cat /srv/kubernetes/kubecfg.key >"${KUBE_KEY}" 2>/dev/null
    vagrant ssh master -- sudo cat /srv/kubernetes/ca.crt >"${CA_CERT}" 2>/dev/null
 
+   # Update the user's kubeconfig to include credentials for this apiserver.
    create-kubeconfig
+
+   create-kubeconfig-for-federation
   )
 
   verify-cluster
@@ -304,6 +314,7 @@ function kube-down {
 # Update a kubernetes cluster with latest source
 function kube-push {
   get-kubeconfig-basicauth
+  get-kubeconfig-bearertoken
   create-provision-scripts
   vagrant provision
 }
@@ -316,6 +327,7 @@ function test-build-release {
 
 # Execute prior to running tests to initialize required structure
 function test-setup {
+  "${KUBE_ROOT}/cluster/kube-up.sh"
   echo "Vagrant test setup complete" 1>&2
 }
 
@@ -369,16 +381,6 @@ function ssh-to-node {
   }
 
   vagrant ssh "${machine}" -c "${cmd}"
-}
-
-# Restart the kube-proxy on a node ($1)
-function restart-kube-proxy {
-  ssh-to-node "$1" "sudo systemctl restart kube-proxy"
-}
-
-# Restart the apiserver
-function restart-apiserver {
-  ssh-to-node "$1" "sudo systemctl restart kube-apiserver"
 }
 
 # Perform preparations required to run e2e tests

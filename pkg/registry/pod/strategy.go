@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
@@ -32,6 +33,7 @@ import (
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/storage"
 	utilnet "k8s.io/kubernetes/pkg/util/net"
 	"k8s.io/kubernetes/pkg/util/validation/field"
 )
@@ -52,7 +54,7 @@ func (podStrategy) NamespaceScoped() bool {
 }
 
 // PrepareForCreate clears fields that are not allowed to be set by end users on creation.
-func (podStrategy) PrepareForCreate(obj runtime.Object) {
+func (podStrategy) PrepareForCreate(ctx api.Context, obj runtime.Object) {
 	pod := obj.(*api.Pod)
 	pod.Status = api.PodStatus{
 		Phase: api.PodPending,
@@ -60,7 +62,7 @@ func (podStrategy) PrepareForCreate(obj runtime.Object) {
 }
 
 // PrepareForUpdate clears fields that are not allowed to be set by end users on update.
-func (podStrategy) PrepareForUpdate(obj, old runtime.Object) {
+func (podStrategy) PrepareForUpdate(ctx api.Context, obj, old runtime.Object) {
 	newPod := obj.(*api.Pod)
 	oldPod := old.(*api.Pod)
 	newPod.Status = oldPod.Status
@@ -94,7 +96,7 @@ func (podStrategy) AllowUnconditionalUpdate() bool {
 
 // CheckGracefulDelete allows a pod to be gracefully deleted. It updates the DeleteOptions to
 // reflect the desired grace value.
-func (podStrategy) CheckGracefulDelete(obj runtime.Object, options *api.DeleteOptions) bool {
+func (podStrategy) CheckGracefulDelete(ctx api.Context, obj runtime.Object, options *api.DeleteOptions) bool {
 	if options == nil {
 		return false
 	}
@@ -127,7 +129,7 @@ type podStrategyWithoutGraceful struct {
 }
 
 // CheckGracefulDelete prohibits graceful deletion.
-func (podStrategyWithoutGraceful) CheckGracefulDelete(obj runtime.Object, options *api.DeleteOptions) bool {
+func (podStrategyWithoutGraceful) CheckGracefulDelete(ctx api.Context, obj runtime.Object, options *api.DeleteOptions) bool {
 	return false
 }
 
@@ -140,7 +142,7 @@ type podStatusStrategy struct {
 
 var StatusStrategy = podStatusStrategy{Strategy}
 
-func (podStatusStrategy) PrepareForUpdate(obj, old runtime.Object) {
+func (podStatusStrategy) PrepareForUpdate(ctx api.Context, obj, old runtime.Object) {
 	newPod := obj.(*api.Pod)
 	oldPod := old.(*api.Pod)
 	newPod.Spec = oldPod.Spec
@@ -153,7 +155,7 @@ func (podStatusStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object
 }
 
 // MatchPod returns a generic matcher for a given label and field selector.
-func MatchPod(label labels.Selector, field fields.Selector) generic.Matcher {
+func MatchPod(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
 	return &generic.SelectionPredicate{
 		Label: label,
 		Field: field,
@@ -162,18 +164,38 @@ func MatchPod(label labels.Selector, field fields.Selector) generic.Matcher {
 			if !ok {
 				return nil, nil, fmt.Errorf("not a pod")
 			}
-			return labels.Set(pod.ObjectMeta.Labels), PodToSelectableFields(pod), nil
+
+			// podLabels is already sitting there ready to be used.
+			// podFields is not available directly and requires allocation of a map.
+			// Only bother if the fields might be useful to determining the match.
+			// One common case is for a replication controller to set up a watch
+			// based on labels alone; in that case we can avoid allocating the field map.
+			// This is especially important in the apiserver.
+			podLabels := labels.Set(pod.ObjectMeta.Labels)
+			var podFields fields.Set
+			if !field.Empty() && label.Matches(podLabels) {
+				podFields = PodToSelectableFields(pod)
+			}
+			return podLabels, podFields, nil
 		},
+		IndexFields: []string{"spec.nodeName"},
 	}
+}
+
+func NodeNameTriggerFunc(obj runtime.Object) []storage.MatchValue {
+	pod := obj.(*api.Pod)
+	result := storage.MatchValue{IndexName: "spec.nodeName", Value: pod.Spec.NodeName}
+	return []storage.MatchValue{result}
 }
 
 // PodToSelectableFields returns a field set that represents the object
 // TODO: fields are not labels, and the validation rules for them do not apply.
 func PodToSelectableFields(pod *api.Pod) fields.Set {
-	objectMetaFieldsSet := generic.ObjectMetaFieldsSet(pod.ObjectMeta, true)
+	objectMetaFieldsSet := generic.ObjectMetaFieldsSet(&pod.ObjectMeta, true)
 	podSpecificFieldsSet := fields.Set{
-		"spec.nodeName": pod.Spec.NodeName,
-		"status.phase":  string(pod.Status.Phase),
+		"spec.nodeName":      pod.Spec.NodeName,
+		"spec.restartPolicy": string(pod.Spec.RestartPolicy),
+		"status.phase":       string(pod.Status.Phase),
 	}
 	return generic.MergeFieldsSets(objectMetaFieldsSet, podSpecificFieldsSet)
 }
@@ -231,6 +253,15 @@ func ResourceLocation(getter ResourceGetter, rt http.RoundTripper, ctx api.Conte
 	return loc, rt, nil
 }
 
+// getContainerNames returns a formatted string containing the container names
+func getContainerNames(containers []api.Container) string {
+	names := []string{}
+	for _, c := range containers {
+		names = append(names, c.Name)
+	}
+	return strings.Join(names, " ")
+}
+
 // LogLocation returns the log URL for a pod container. If opts.Container is blank
 // and only one container is present in the pod, that container is used.
 func LogLocation(
@@ -249,10 +280,19 @@ func LogLocation(
 	// If a container was provided, it must be valid
 	container := opts.Container
 	if len(container) == 0 {
-		if len(pod.Spec.Containers) == 1 {
+		switch len(pod.Spec.Containers) {
+		case 1:
 			container = pod.Spec.Containers[0].Name
-		} else {
+		case 0:
 			return nil, nil, errors.NewBadRequest(fmt.Sprintf("a container name must be specified for pod %s", name))
+		default:
+			containerNames := getContainerNames(pod.Spec.Containers)
+			initContainerNames := getContainerNames(pod.Spec.InitContainers)
+			err := fmt.Sprintf("a container name must be specified for pod %s, choose one of: [%s]", name, containerNames)
+			if len(initContainerNames) > 0 {
+				err += fmt.Sprintf(" or one of the init containers: [%s]", initContainerNames)
+			}
+			return nil, nil, errors.NewBadRequest(err)
 		}
 	} else {
 		if !podHasContainerWithName(pod, container) {
@@ -301,6 +341,11 @@ func LogLocation(
 
 func podHasContainerWithName(pod *api.Pod, containerName string) bool {
 	for _, c := range pod.Spec.Containers {
+		if c.Name == containerName {
+			return true
+		}
+	}
+	for _, c := range pod.Spec.InitContainers {
 		if c.Name == containerName {
 			return true
 		}
@@ -386,10 +431,19 @@ func streamLocation(
 	// Try to figure out a container
 	// If a container was provided, it must be valid
 	if container == "" {
-		if len(pod.Spec.Containers) == 1 {
+		switch len(pod.Spec.Containers) {
+		case 1:
 			container = pod.Spec.Containers[0].Name
-		} else {
+		case 0:
 			return nil, nil, errors.NewBadRequest(fmt.Sprintf("a container name must be specified for pod %s", name))
+		default:
+			containerNames := getContainerNames(pod.Spec.Containers)
+			initContainerNames := getContainerNames(pod.Spec.InitContainers)
+			err := fmt.Sprintf("a container name must be specified for pod %s, choose one of: [%s]", name, containerNames)
+			if len(initContainerNames) > 0 {
+				err += fmt.Sprintf(" or one of the init containers: [%s]", initContainerNames)
+			}
+			return nil, nil, errors.NewBadRequest(err)
 		}
 	} else {
 		if !podHasContainerWithName(pod, container) {

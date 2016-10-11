@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,7 +25,6 @@ import (
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	apitesting "k8s.io/kubernetes/pkg/api/testing"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/intstr"
 )
@@ -81,6 +80,9 @@ func TestExportService(t *testing.T) {
 					Name:      "foo",
 					Namespace: "bar",
 				},
+				Spec: api.ServiceSpec{
+					ClusterIP: "<unknown>",
+				},
 			},
 		},
 		{
@@ -90,7 +92,7 @@ func TestExportService(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		err := Strategy.Export(test.objIn, test.exact)
+		err := Strategy.Export(api.NewContext(), test.objIn, test.exact)
 		if err != nil {
 			if !test.expectErr {
 				t.Errorf("unexpected error: %v", err)
@@ -213,7 +215,37 @@ func TestSelectableFieldLabelConversions(t *testing.T) {
 	apitesting.TestSelectableFieldLabelConversionsOfKind(t,
 		testapi.Default.GroupVersion().String(),
 		"Service",
-		labels.Set(ServiceToSelectableFields(&api.Service{})),
+		ServiceToSelectableFields(&api.Service{}),
 		nil,
 	)
+}
+
+func TestServiceStatusStrategy(t *testing.T) {
+	ctx := api.NewDefaultContext()
+	if !StatusStrategy.NamespaceScoped() {
+		t.Errorf("Service must be namespace scoped")
+	}
+	oldService := makeValidService()
+	newService := makeValidService()
+	oldService.ResourceVersion = "4"
+	newService.ResourceVersion = "4"
+	newService.Spec.SessionAffinity = "ClientIP"
+	newService.Status = api.ServiceStatus{
+		LoadBalancer: api.LoadBalancerStatus{
+			Ingress: []api.LoadBalancerIngress{
+				{IP: "127.0.0.2"},
+			},
+		},
+	}
+	StatusStrategy.PrepareForUpdate(ctx, &newService, &oldService)
+	if newService.Status.LoadBalancer.Ingress[0].IP != "127.0.0.2" {
+		t.Errorf("Service status updates should allow change of status fields")
+	}
+	if newService.Spec.SessionAffinity != "None" {
+		t.Errorf("PrepareForUpdate should have preserved old spec")
+	}
+	errs := StatusStrategy.ValidateUpdate(ctx, &newService, &oldService)
+	if len(errs) != 0 {
+		t.Errorf("Unexpected error %v", errs)
+	}
 }

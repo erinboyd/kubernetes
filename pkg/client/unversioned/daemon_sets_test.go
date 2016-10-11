@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@ limitations under the License.
 package unversioned_test
 
 import (
-	. "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/testclient/simple"
 )
 
@@ -52,7 +51,7 @@ func TestListDaemonSets(t *testing.T) {
 							},
 						},
 						Spec: extensions.DaemonSetSpec{
-							Template: &api.PodTemplateSpec{},
+							Template: api.PodTemplateSpec{},
 						},
 					},
 				},
@@ -80,7 +79,7 @@ func TestGetDaemonSet(t *testing.T) {
 					},
 				},
 				Spec: extensions.DaemonSetSpec{
-					Template: &api.PodTemplateSpec{},
+					Template: api.PodTemplateSpec{},
 				},
 			},
 		},
@@ -120,7 +119,7 @@ func TestUpdateDaemonSet(t *testing.T) {
 					},
 				},
 				Spec: extensions.DaemonSetSpec{
-					Template: &api.PodTemplateSpec{},
+					Template: api.PodTemplateSpec{},
 				},
 			},
 		},
@@ -148,7 +147,7 @@ func TestUpdateDaemonSetUpdateStatus(t *testing.T) {
 					},
 				},
 				Spec: extensions.DaemonSetSpec{
-					Template: &api.PodTemplateSpec{},
+					Template: api.PodTemplateSpec{},
 				},
 				Status: extensions.DaemonSetStatus{},
 			},
@@ -188,7 +187,7 @@ func TestCreateDaemonSet(t *testing.T) {
 					},
 				},
 				Spec: extensions.DaemonSetSpec{
-					Template: &api.PodTemplateSpec{},
+					Template: api.PodTemplateSpec{},
 				},
 			},
 		},

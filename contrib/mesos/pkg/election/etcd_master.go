@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ import (
 
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	etcdutil "k8s.io/kubernetes/pkg/storage/etcd/util"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/pkg/watch"
 )
 
@@ -57,7 +57,7 @@ type etcdMasterElector struct {
 func (e *etcdMasterElector) Elect(path, id string) watch.Interface {
 	e.done = make(chan empty)
 	e.events = make(chan watch.Event)
-	go util.Until(func() { e.run(path, id) }, time.Second*5, util.NeverStop)
+	go wait.Until(func() { e.run(path, id) }, time.Second*5, wait.NeverStop)
 	return e
 }
 

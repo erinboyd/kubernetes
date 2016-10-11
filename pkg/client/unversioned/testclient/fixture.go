@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,11 +22,10 @@ import (
 	"reflect"
 	"strings"
 
-	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/yaml"
 	"k8s.io/kubernetes/pkg/watch"
@@ -80,26 +79,24 @@ func ObjectReaction(o ObjectRetriever, mapper meta.RESTMapper) ReactionFunc {
 			return true, resource, err
 
 		case CreateAction:
-			meta, err := api.ObjectMetaFor(castAction.GetObject())
+			accessor, err := meta.Accessor(castAction.GetObject())
 			if err != nil {
 				return true, nil, err
 			}
-			resource, err := o.Kind(kind, meta.Name)
+			resource, err := o.Kind(kind, accessor.GetName())
 			return true, resource, err
 
 		case UpdateAction:
-			meta, err := api.ObjectMetaFor(castAction.GetObject())
+			accessor, err := meta.Accessor(castAction.GetObject())
 			if err != nil {
 				return true, nil, err
 			}
-			resource, err := o.Kind(kind, meta.Name)
+			resource, err := o.Kind(kind, accessor.GetName())
 			return true, resource, err
 
 		default:
 			return false, nil, fmt.Errorf("no reaction implemented for %s", action)
 		}
-
-		return true, nil, nil
 	}
 }
 
@@ -128,7 +125,7 @@ type objects struct {
 	types   map[string][]runtime.Object
 	last    map[string]int
 	scheme  ObjectScheme
-	decoder runtime.ObjectDecoder
+	decoder runtime.Decoder
 }
 
 var _ ObjectRetriever = &objects{}
@@ -143,7 +140,7 @@ var _ ObjectRetriever = &objects{}
 // as a runtime.Object if Status == Success).  If multiple PodLists are provided, they
 // will be returned in order by the Kind call, and the last PodList will be reused for
 // subsequent calls.
-func NewObjects(scheme ObjectScheme, decoder runtime.ObjectDecoder) ObjectRetriever {
+func NewObjects(scheme ObjectScheme, decoder runtime.Decoder) ObjectRetriever {
 	return objects{
 		types:   make(map[string][]runtime.Object),
 		last:    make(map[string]int),
@@ -153,10 +150,7 @@ func NewObjects(scheme ObjectScheme, decoder runtime.ObjectDecoder) ObjectRetrie
 }
 
 func (o objects) Kind(kind unversioned.GroupVersionKind, name string) (runtime.Object, error) {
-	// TODO our test clients deal in internal versions.  We need to plumb that knowledge down here
-	// we might do this via an extra function to the scheme to allow getting internal group versions
-	// I'm punting for now
-	kind.Version = ""
+	kind.Version = runtime.APIVersionInternal
 
 	empty, _ := o.scheme.New(kind)
 	nilValue := reflect.Zero(reflect.TypeOf(empty)).Interface().(runtime.Object)
@@ -210,11 +204,11 @@ func (o objects) Kind(kind unversioned.GroupVersionKind, name string) (runtime.O
 }
 
 func (o objects) Add(obj runtime.Object) error {
-	gvk, err := o.scheme.ObjectKind(obj)
+	gvks, _, err := o.scheme.ObjectKinds(obj)
 	if err != nil {
 		return err
 	}
-	kind := gvk.Kind
+	kind := gvks[0].Kind
 
 	switch {
 	case meta.IsListType(obj):
@@ -314,6 +308,6 @@ func (r *SimpleProxyReactor) Handles(action Action) bool {
 	return true
 }
 
-func (r *SimpleProxyReactor) React(action Action) (bool, client.ResponseWrapper, error) {
+func (r *SimpleProxyReactor) React(action Action) (bool, restclient.ResponseWrapper, error) {
 	return r.Reaction(action)
 }

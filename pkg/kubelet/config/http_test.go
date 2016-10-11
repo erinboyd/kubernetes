@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -44,7 +44,7 @@ func TestURLErrorNotExistNoUpdate(t *testing.T) {
 
 func TestExtractFromHttpBadness(t *testing.T) {
 	ch := make(chan interface{}, 1)
-	c := sourceURL{"http://localhost:49575/_not_found_", http.Header{}, "other", ch, nil, 0}
+	c := sourceURL{"http://localhost:49575/_not_found_", http.Header{}, "other", ch, nil, 0, http.DefaultClient}
 	if err := c.extractFromURL(); err == nil {
 		t.Errorf("Expected error")
 	}
@@ -111,10 +111,9 @@ func TestExtractInvalidPods(t *testing.T) {
 			ResponseBody: string(data),
 		}
 		testServer := httptest.NewServer(&fakeHandler)
-		// TODO: Uncomment when fix #19254
-		// defer testServer.Close()
+		defer testServer.Close()
 		ch := make(chan interface{}, 1)
-		c := sourceURL{testServer.URL, http.Header{}, "localhost", ch, nil, 0}
+		c := sourceURL{testServer.URL, http.Header{}, "localhost", ch, nil, 0, http.DefaultClient}
 		if err := c.extractFromURL(); err == nil {
 			t.Errorf("%s: Expected error", testCase.desc)
 		}
@@ -277,11 +276,11 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 
 	for _, testCase := range testCases {
 		var versionedPods runtime.Object
-		err := testapi.Default.Converter().Convert(&testCase.pods, &versionedPods)
+		err := testapi.Default.Converter().Convert(&testCase.pods, &versionedPods, nil)
 		if err != nil {
 			t.Fatalf("%s: error in versioning the pods: %s", testCase.desc, err)
 		}
-		data, err := testapi.Default.Codec().Encode(versionedPods)
+		data, err := runtime.Encode(testapi.Default.Codec(), versionedPods)
 		if err != nil {
 			t.Fatalf("%s: error in encoding the pod: %v", testCase.desc, err)
 		}
@@ -290,10 +289,9 @@ func TestExtractPodsFromHTTP(t *testing.T) {
 			ResponseBody: string(data),
 		}
 		testServer := httptest.NewServer(&fakeHandler)
-		// TODO: Uncomment when fix #19254
-		// defer testServer.Close()
+		defer testServer.Close()
 		ch := make(chan interface{}, 1)
-		c := sourceURL{testServer.URL, http.Header{}, hostname, ch, nil, 0}
+		c := sourceURL{testServer.URL, http.Header{}, hostname, ch, nil, 0, http.DefaultClient}
 		if err := c.extractFromURL(); err != nil {
 			t.Errorf("%s: Unexpected error: %v", testCase.desc, err)
 			continue
@@ -336,12 +334,11 @@ func TestURLWithHeader(t *testing.T) {
 		ResponseBody: string(data),
 	}
 	testServer := httptest.NewServer(&fakeHandler)
-	// TODO: Uncomment when fix #19254
-	// defer testServer.Close()
+	defer testServer.Close()
 	ch := make(chan interface{}, 1)
 	header := make(http.Header)
 	header.Set("Metadata-Flavor", "Google")
-	c := sourceURL{testServer.URL, header, "localhost", ch, nil, 0}
+	c := sourceURL{testServer.URL, header, "localhost", ch, nil, 0, http.DefaultClient}
 	if err := c.extractFromURL(); err != nil {
 		t.Fatalf("Unexpected error extracting from URL: %v", err)
 	}

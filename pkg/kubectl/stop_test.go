@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,11 +24,15 @@ import (
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/apis/batch"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	deploymentutil "k8s.io/kubernetes/pkg/controller/deployment/util"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/watch"
 )
 
 func TestReplicationControllerStop(t *testing.T) {
@@ -67,7 +71,7 @@ func TestReplicationControllerStop(t *testing.T) {
 				},
 			},
 			StopError:       nil,
-			ExpectedActions: []string{"get", "list", "get", "update", "get", "get", "delete"},
+			ExpectedActions: []string{"get", "list", "get", "update", "get", "delete"},
 		},
 		{
 			Name: "NoOverlapping",
@@ -105,7 +109,7 @@ func TestReplicationControllerStop(t *testing.T) {
 				},
 			},
 			StopError:       nil,
-			ExpectedActions: []string{"get", "list", "get", "update", "get", "get", "delete"},
+			ExpectedActions: []string{"get", "list", "get", "update", "get", "delete"},
 		},
 		{
 			Name: "OverlappingError",
@@ -240,9 +244,20 @@ func TestReplicationControllerStop(t *testing.T) {
 	}
 
 	for _, test := range tests {
+		copiedForWatch, err := api.Scheme.Copy(test.Objs[0])
+		if err != nil {
+			t.Fatalf("%s unexpected error: %v", test.Name, err)
+		}
 		fake := testclient.NewSimpleFake(test.Objs...)
+		fakeWatch := watch.NewFake()
+		fake.PrependWatchReactor("replicationcontrollers", testclient.DefaultWatchReactor(fakeWatch, nil))
+
+		go func() {
+			fakeWatch.Add(copiedForWatch)
+		}()
+
 		reaper := ReplicationControllerReaper{fake, time.Millisecond, time.Millisecond}
-		err := reaper.Stop(ns, name, 0, nil)
+		err = reaper.Stop(ns, name, 0, nil)
 		if !reflect.DeepEqual(err, test.StopError) {
 			t.Errorf("%s unexpected error: %v", test.Name, err)
 			continue
@@ -264,10 +279,120 @@ func TestReplicationControllerStop(t *testing.T) {
 	}
 }
 
+func TestReplicaSetStop(t *testing.T) {
+	name := "foo"
+	ns := "default"
+	tests := []struct {
+		Name            string
+		Objs            []runtime.Object
+		StopError       error
+		ExpectedActions []string
+	}{
+		{
+			Name: "OnlyOneRS",
+			Objs: []runtime.Object{
+				&extensions.ReplicaSet{ // GET
+					ObjectMeta: api.ObjectMeta{
+						Name:      name,
+						Namespace: ns,
+					},
+					Spec: extensions.ReplicaSetSpec{
+						Replicas: 0,
+						Selector: &unversioned.LabelSelector{MatchLabels: map[string]string{"k1": "v1"}},
+					},
+				},
+				&extensions.ReplicaSetList{ // LIST
+					Items: []extensions.ReplicaSet{
+						{
+							ObjectMeta: api.ObjectMeta{
+								Name:      name,
+								Namespace: ns,
+							},
+							Spec: extensions.ReplicaSetSpec{
+								Replicas: 0,
+								Selector: &unversioned.LabelSelector{MatchLabels: map[string]string{"k1": "v1"}},
+							},
+						},
+					},
+				},
+			},
+			StopError:       nil,
+			ExpectedActions: []string{"get", "get", "update", "get", "get", "delete"},
+		},
+		{
+			Name: "NoOverlapping",
+			Objs: []runtime.Object{
+				&extensions.ReplicaSet{ // GET
+					ObjectMeta: api.ObjectMeta{
+						Name:      name,
+						Namespace: ns,
+					},
+					Spec: extensions.ReplicaSetSpec{
+						Replicas: 0,
+						Selector: &unversioned.LabelSelector{MatchLabels: map[string]string{"k1": "v1"}},
+					},
+				},
+				&extensions.ReplicaSetList{ // LIST
+					Items: []extensions.ReplicaSet{
+						{
+							ObjectMeta: api.ObjectMeta{
+								Name:      "baz",
+								Namespace: ns,
+							},
+							Spec: extensions.ReplicaSetSpec{
+								Replicas: 0,
+								Selector: &unversioned.LabelSelector{MatchLabels: map[string]string{"k3": "v3"}},
+							},
+						},
+						{
+							ObjectMeta: api.ObjectMeta{
+								Name:      name,
+								Namespace: ns,
+							},
+							Spec: extensions.ReplicaSetSpec{
+								Replicas: 0,
+								Selector: &unversioned.LabelSelector{MatchLabels: map[string]string{"k1": "v1"}},
+							},
+						},
+					},
+				},
+			},
+			StopError:       nil,
+			ExpectedActions: []string{"get", "get", "update", "get", "get", "delete"},
+		},
+		// TODO: Implement tests for overlapping replica sets, similar to replication controllers,
+		// when the overlapping checks are implemented for replica sets.
+	}
+
+	for _, test := range tests {
+		fake := testclient.NewSimpleFake(test.Objs...)
+		reaper := ReplicaSetReaper{fake, time.Millisecond, time.Millisecond}
+		err := reaper.Stop(ns, name, 0, nil)
+		if !reflect.DeepEqual(err, test.StopError) {
+			t.Errorf("%s unexpected error: %v", test.Name, err)
+			continue
+		}
+
+		actions := fake.Actions()
+		if len(actions) != len(test.ExpectedActions) {
+			t.Errorf("%s unexpected actions: %v, expected %d actions got %d", test.Name, actions, len(test.ExpectedActions), len(actions))
+			continue
+		}
+		for i, verb := range test.ExpectedActions {
+			if actions[i].GetResource() != "replicasets" {
+				t.Errorf("%s unexpected action: %+v, expected %s-replicaSet", test.Name, actions[i], verb)
+			}
+			if actions[i].GetVerb() != verb {
+				t.Errorf("%s unexpected action: %+v, expected %s-replicaSet", test.Name, actions[i], verb)
+			}
+		}
+	}
+}
+
 func TestJobStop(t *testing.T) {
 	name := "foo"
 	ns := "default"
-	zero := 0
+	zero := int32(0)
 	tests := []struct {
 		Name            string
 		Objs            []runtime.Object
@@ -277,28 +402,28 @@ func TestJobStop(t *testing.T) {
 		{
 			Name: "OnlyOneJob",
 			Objs: []runtime.Object{
-				&extensions.Job{ // GET
+				&batch.Job{ // GET
 					ObjectMeta: api.ObjectMeta{
 						Name:      name,
 						Namespace: ns,
 					},
-					Spec: extensions.JobSpec{
+					Spec: batch.JobSpec{
 						Parallelism: &zero,
-						Selector: &extensions.LabelSelector{
+						Selector: &unversioned.LabelSelector{
 							MatchLabels: map[string]string{"k1": "v1"},
 						},
 					},
 				},
-				&extensions.JobList{ // LIST
-					Items: []extensions.Job{
+				&batch.JobList{ // LIST
+					Items: []batch.Job{
 						{
 							ObjectMeta: api.ObjectMeta{
 								Name:      name,
 								Namespace: ns,
 							},
-							Spec: extensions.JobSpec{
+							Spec: batch.JobSpec{
 								Parallelism: &zero,
-								Selector: &extensions.LabelSelector{
+								Selector: &unversioned.LabelSelector{
 									MatchLabels: map[string]string{"k1": "v1"},
 								},
 							},
@@ -313,28 +438,28 @@ func TestJobStop(t *testing.T) {
 		{
 			Name: "JobWithDeadPods",
 			Objs: []runtime.Object{
-				&extensions.Job{ // GET
+				&batch.Job{ // GET
 					ObjectMeta: api.ObjectMeta{
 						Name:      name,
 						Namespace: ns,
 					},
-					Spec: extensions.JobSpec{
+					Spec: batch.JobSpec{
 						Parallelism: &zero,
-						Selector: &extensions.LabelSelector{
+						Selector: &unversioned.LabelSelector{
 							MatchLabels: map[string]string{"k1": "v1"},
 						},
 					},
 				},
-				&extensions.JobList{ // LIST
-					Items: []extensions.Job{
+				&batch.JobList{ // LIST
+					Items: []batch.Job{
 						{
 							ObjectMeta: api.ObjectMeta{
 								Name:      name,
 								Namespace: ns,
 							},
-							Spec: extensions.JobSpec{
+							Spec: batch.JobSpec{
 								Parallelism: &zero,
-								Selector: &extensions.LabelSelector{
+								Selector: &unversioned.LabelSelector{
 									MatchLabels: map[string]string{"k1": "v1"},
 								},
 							},
@@ -380,6 +505,105 @@ func TestJobStop(t *testing.T) {
 			}
 			if actions[i].GetResource() != action[1] {
 				t.Errorf("%s unexpected resource: %+v, expected %s", test.Name, actions[i], expAction)
+			}
+		}
+	}
+}
+
+func TestDeploymentStop(t *testing.T) {
+	name := "foo"
+	ns := "default"
+	deployment := extensions.Deployment{
+		ObjectMeta: api.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+		},
+		Spec: extensions.DeploymentSpec{
+			Replicas: 0,
+			Selector: &unversioned.LabelSelector{MatchLabels: map[string]string{"k1": "v1"}},
+		},
+		Status: extensions.DeploymentStatus{
+			Replicas: 0,
+		},
+	}
+	template := deploymentutil.GetNewReplicaSetTemplate(&deployment)
+	tests := []struct {
+		Name            string
+		Objs            []runtime.Object
+		StopError       error
+		ExpectedActions []string
+	}{
+		{
+			Name: "SimpleDeployment",
+			Objs: []runtime.Object{
+				&extensions.Deployment{ // GET
+					ObjectMeta: api.ObjectMeta{
+						Name:      name,
+						Namespace: ns,
+					},
+					Spec: extensions.DeploymentSpec{
+						Replicas: 0,
+						Selector: &unversioned.LabelSelector{MatchLabels: map[string]string{"k1": "v1"}},
+					},
+					Status: extensions.DeploymentStatus{
+						Replicas: 0,
+					},
+				},
+			},
+			StopError: nil,
+			ExpectedActions: []string{"get:deployments", "update:deployments",
+				"get:deployments", "list:replicasets", "delete:deployments"},
+		},
+		{
+			Name: "Deployment with single replicaset",
+			Objs: []runtime.Object{
+				&deployment, // GET
+				&extensions.ReplicaSetList{ // LIST
+					Items: []extensions.ReplicaSet{
+						{
+							ObjectMeta: api.ObjectMeta{
+								Name:      name,
+								Namespace: ns,
+							},
+							Spec: extensions.ReplicaSetSpec{
+								Template: template,
+							},
+						},
+					},
+				},
+			},
+			StopError: nil,
+			ExpectedActions: []string{"get:deployments", "update:deployments",
+				"get:deployments", "list:replicasets", "get:replicasets",
+				"get:replicasets", "update:replicasets", "get:replicasets",
+				"get:replicasets", "delete:replicasets", "delete:deployments"},
+		},
+	}
+
+	for _, test := range tests {
+		fake := testclient.NewSimpleFake(test.Objs...)
+		reaper := DeploymentReaper{fake, time.Millisecond, time.Millisecond}
+		err := reaper.Stop(ns, name, 0, nil)
+		if !reflect.DeepEqual(err, test.StopError) {
+			t.Errorf("%s unexpected error: %v", test.Name, err)
+			continue
+		}
+
+		actions := fake.Actions()
+		if len(actions) != len(test.ExpectedActions) {
+			t.Errorf("%s unexpected actions: %v, expected %d actions got %d", test.Name, actions, len(test.ExpectedActions), len(actions))
+			continue
+		}
+		for i, expAction := range test.ExpectedActions {
+			action := strings.Split(expAction, ":")
+			if actions[i].GetVerb() != action[0] {
+				t.Errorf("%s unexpected verb: %+v, expected %s", test.Name, actions[i], expAction)
+			}
+			if actions[i].GetResource() != action[1] {
+				t.Errorf("%s unexpected resource: %+v, expected %s", test.Name, actions[i], expAction)
+			}
+			if len(action) == 3 && actions[i].GetSubresource() != action[2] {
+				t.Errorf("%s unexpected subresource: %+v, expected %s", test.Name, actions[i], expAction)
 			}
 		}
 	}
@@ -494,7 +718,7 @@ func TestSimpleStop(t *testing.T) {
 		}
 		actions := fake.Actions()
 		if len(test.actions) != len(actions) {
-			t.Errorf("unexpected actions: %v; expected %v (%s)", fake.Actions, test.actions, test.test)
+			t.Errorf("unexpected actions: %v; expected %v (%s)", actions, test.actions, test.test)
 		}
 		for i, action := range actions {
 			testAction := test.actions[i]
@@ -502,5 +726,51 @@ func TestSimpleStop(t *testing.T) {
 				t.Errorf("unexpected action: %#v; expected %v (%s)", action, testAction, test.test)
 			}
 		}
+	}
+}
+
+func TestDeploymentNotFoundError(t *testing.T) {
+	name := "foo"
+	ns := "default"
+	deployment := &extensions.Deployment{
+		ObjectMeta: api.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+		},
+		Spec: extensions.DeploymentSpec{
+			Replicas: 0,
+			Selector: &unversioned.LabelSelector{MatchLabels: map[string]string{"k1": "v1"}},
+		},
+		Status: extensions.DeploymentStatus{
+			Replicas: 0,
+		},
+	}
+	template := deploymentutil.GetNewReplicaSetTemplate(deployment)
+
+	fake := &testclient.Fake{}
+	fake.AddReactor("get", "deployments", func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true, deployment, nil
+	})
+	fake.AddReactor("list", "replicasets", func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+		list := &extensions.ReplicaSetList{Items: []extensions.ReplicaSet{
+			{
+				ObjectMeta: api.ObjectMeta{
+					Name:      name,
+					Namespace: ns,
+				},
+				Spec: extensions.ReplicaSetSpec{
+					Template: template,
+				},
+			},
+		}}
+		return true, list, nil
+	})
+	fake.AddReactor("get", "replicasets", func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, ScaleError{ActualError: errors.NewNotFound(api.Resource("replicaset"), "doesn't-matter")}
+	})
+
+	reaper := DeploymentReaper{fake, time.Millisecond, time.Millisecond}
+	if err := reaper.Stop(ns, name, 0, nil); err != nil {
+		t.Fatalf("unexpected error: %#v", err)
 	}
 }

@@ -2,15 +2,15 @@
 
 <!-- BEGIN STRIP_FOR_RELEASE -->
 
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
 
 <h2>PLEASE NOTE: This document applies to the HEAD of the source tree</h2>
@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.1/docs/devel/releasing.md).
+[here](http://releases.k8s.io/release-1.4/docs/devel/releasing.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -82,11 +82,11 @@ from, and other prerequisites.
   * You should still look for green tests, (see below).
 
 No matter what you're cutting, you're going to want to look at
-[Jenkins](http://go/k8s-test/).  Figure out what branch you're cutting from,
-(see above,) and look at the critical jobs building from that branch.  First
-glance through builds and look for nice solid rows of green builds, and then
-check temporally with the other critical builds to make sure they're solid
-around then as well.
+[Jenkins](http://kubekins.dls.corp.google.com/) (Google internal only).  Figure
+out what branch you're cutting from, (see above,) and look at the critical jobs
+building from that branch.  First glance through builds and look for nice solid
+rows of green builds, and then check temporally with the other critical builds
+to make sure they're solid around then as well.
 
 If you're doing an alpha release or cutting a new release series, you can
 choose an arbitrary build.  If you are doing an official release, you have to
@@ -153,7 +153,7 @@ Then, run
 
 This will do a dry run of the release.  It will give you instructions at the
 end for `pushd`ing into the dry-run directory and having a look around.
-`pushd` into the directory and make sure everythig looks as you expect:
+`pushd` into the directory and make sure everything looks as you expect:
 
 ```console
 git log "${RELEASE_VERSION}"  # do you see the commit you expect?
@@ -208,33 +208,60 @@ release](https://github.com/kubernetes/kubernetes/releases/new):
 1. fill in the release title from the draft;
 1. re-run the appropriate release notes tool(s) to pick up any changes people
    have made;
-1. find the appropriate `kubernetes.tar.gz` in [GCS bucket](https://
-console.developers.google.com/storage/browser/kubernetes-release/release/),
+1. find the appropriate `kubernetes.tar.gz` in [GCS bucket](https://console.developers.google.com/storage/browser/kubernetes-release/release/),
    download it, double check the hash (compare to what you had in the release
    notes draft), and attach it to the release; and
 1. publish!
 
-Finally, from a clone of upstream/master, *make sure* you still have
-`RELEASE_VERSION` set correctly, and run `./build/mark-stable-release.sh
-${RELEASE_VERSION}`.
+### Manual tasks for new release series
 
-### Updating the master branch
+*TODO(#20946) Burn this list down.*
 
-If you are cutting a new release series, please also update the master branch:
-change the `latestReleaseBranch` in `cmd/mungedocs/mungedocs.go` to the new
-release branch (`release-X.Y`), run `hack/update-generated-docs.sh`. This will
-let the unversioned warning in docs point to the latest release series. Please
-send the changes as a PR titled "Update the latestReleaseBranch to release-X.Y
-in the munger".
+If you are cutting a new release series, there are a few tasks that haven't yet
+been automated that need to happen after the branch has been cut:
+
+1. Update the master branch constant for doc generation: change the
+   `latestReleaseBranch` in `cmd/mungedocs/mungedocs.go` to the new release
+   branch (`release-X.Y`), run `hack/update-generated-docs.sh`.  This will let
+   the unversioned warning in docs point to the latest release series. Please
+   send the changes as a PR titled "Update the latestReleaseBranch to
+   release-X.Y in the munger".
+1. Send a note to the test team (@kubernetes/goog-testing) that a new branch
+   has been created.
+   1. There is currently much work being done on our Jenkins infrastructure
+      and configs.  Eventually we could have a relatively simple interface
+      to make this change or a way to automatically use the new branch.
+      See [recent Issue #22672](https://github.com/kubernetes/kubernetes/issues/22672).
+   1. You can provide this guidance in the email to aid in the setup:
+      1. See [End-2-End Testing in Kubernetes](e2e-tests.md) for the test jobs
+         that should be running in CI, which are under version control in
+         `hack/jenkins/e2e.sh` (on the release branch) and
+         `hack/jenkins/job-configs/kubernetes-jenkins/kubernetes-e2e.yaml`
+         (in `master`).  You'll want to munge these for the release
+         branch so that, as we cherry-pick fixes onto the branch, we know that
+         it builds, etc.  (Talk with @ihmccreery for more details.)
+      1. Make sure all features that are supposed to be GA are covered by tests,
+         but remove feature tests on the release branch for features that aren't
+         GA.  You can use `hack/list-feature-tests.sh` to see a list of tests
+         labeled as `[Feature:.+]`; make sure that these are all either
+         covered in CI jobs on the release branch or are experimental
+         features.  (The answer should already be 'yes', but this is a
+         good time to reconcile.)
+      1. Make a dashboard in Jenkins that contains all of the jobs for this
+         release cycle, and also add them to Critical Builds.  (Don't add
+         them to the merge-bot blockers; see kubernetes/contrib#156.)
+
 
 ## Injecting Version into Binaries
 
 *Please note that this information may be out of date.  The scripts are the
 authoritative source on how version injection works.*
 
-Kubernetes may be built from either a git tree (using `hack/build-go.sh`) or
-from a tarball (using either `hack/build-go.sh` or `go install`) or directly by
-the Go native build system (using `go get`).
+Kubernetes may be built from either a git tree or from a tarball.  We use
+`make` to encapsulate a number of build steps into a single command.  This
+includes generating code, which means that tools like `go build` might work
+(once files are generated) but might be using stale generated code.  `make` is
+the supported way to build.
 
 When building from git, we want to be able to insert specific information about
 the build tree at build time. In particular, we want to use the output of `git
@@ -269,7 +296,7 @@ yield binaries that will identify themselves as `v0.4-dev` and will not be able
 to provide you with a SHA1.
 
 To add the extra versioning information when building from git, the
-`hack/build-go.sh` script will gather that information (using `git describe` and
+`make` build will gather that information (using `git describe` and
 `git rev-parse`) and then create a `-ldflags` string to pass to `go install` and
 tell the Go linker to override the contents of those variables at build time. It
 can, for instance, tell it to override `gitVersion` and set it to

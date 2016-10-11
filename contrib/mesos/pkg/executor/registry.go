@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,10 +21,11 @@ import (
 	"errors"
 	"sync"
 
+	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+
 	"k8s.io/kubernetes/contrib/mesos/pkg/executor/messages"
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/meta"
 	"k8s.io/kubernetes/pkg/api"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
 
 	log "github.com/golang/glog"
 )
@@ -69,7 +70,7 @@ type (
 	}
 
 	registryImpl struct {
-		client     *client.Client
+		client     *clientset.Clientset
 		updates    chan *PodEvent
 		m          sync.RWMutex
 		boundTasks map[string]*api.Pod
@@ -108,7 +109,7 @@ func (rp *PodEvent) FormatShort() string {
 	return "task '" + rp.taskID + "' pod '" + rp.pod.Namespace + "/" + rp.pod.Name + "'"
 }
 
-func NewRegistry(client *client.Client) Registry {
+func NewRegistry(client *clientset.Clientset) Registry {
 	r := &registryImpl{
 		client:     client,
 		updates:    make(chan *PodEvent, updatesBacklogSize),
@@ -117,7 +118,7 @@ func NewRegistry(client *client.Client) Registry {
 	return r
 }
 
-func (r registryImpl) watch() <-chan *PodEvent {
+func (r *registryImpl) watch() <-chan *PodEvent {
 	return r.updates
 }
 
@@ -129,26 +130,26 @@ func taskIDFor(pod *api.Pod) (taskID string, err error) {
 	return
 }
 
-func (r registryImpl) shutdown() {
+func (r *registryImpl) shutdown() {
 	//TODO(jdef) flesh this out
 	r.m.Lock()
 	defer r.m.Unlock()
 	r.boundTasks = map[string]*api.Pod{}
 }
 
-func (r registryImpl) empty() bool {
+func (r *registryImpl) empty() bool {
 	r.m.RLock()
 	defer r.m.RUnlock()
 	return len(r.boundTasks) == 0
 }
 
-func (r registryImpl) pod(taskID string) *api.Pod {
+func (r *registryImpl) pod(taskID string) *api.Pod {
 	r.m.RLock()
 	defer r.m.RUnlock()
 	return r.boundTasks[taskID]
 }
 
-func (r registryImpl) Remove(taskID string) error {
+func (r *registryImpl) Remove(taskID string) error {
 	r.m.Lock()
 	defer r.m.Unlock()
 	pod, ok := r.boundTasks[taskID]
@@ -168,7 +169,7 @@ func (r registryImpl) Remove(taskID string) error {
 	return nil
 }
 
-func (r registryImpl) Update(pod *api.Pod) (*PodEvent, error) {
+func (r *registryImpl) Update(pod *api.Pod) (*PodEvent, error) {
 	// Don't do anything for pods without task anotation which means:
 	// - "pre-scheduled" pods which have a NodeName set to this node without being scheduled already.
 	// - static/mirror pods: they'll never have a TaskID annotation, and we don't expect them to ever change.
@@ -253,8 +254,7 @@ func copyPorts(dest, src *api.Pod) bool {
 	return true
 }
 
-func (r registryImpl) bind(taskID string, pod *api.Pod) error {
-
+func (r *registryImpl) bind(taskID string, pod *api.Pod) error {
 	// validate taskID matches that of the annotation
 	annotatedTaskID, err := taskIDFor(pod)
 	if err != nil {
@@ -305,7 +305,7 @@ func (r registryImpl) bind(taskID string, pod *api.Pod) error {
 		log.Infof("Binding task %v pod '%v/%v' to '%v' with annotations %+v...",
 			taskID, pod.Namespace, pod.Name, binding.Target.Name, binding.Annotations)
 		ctx := api.WithNamespace(api.NewContext(), binding.Namespace)
-		err := r.client.Post().Namespace(api.NamespaceValue(ctx)).Resource("bindings").Body(binding).Do().Error()
+		err := r.client.CoreClient.Post().Namespace(api.NamespaceValue(ctx)).Resource("bindings").Body(binding).Do().Error()
 		if err != nil {
 			log.Warningf("failed to bind task %v pod %v/%v: %v", taskID, pod.Namespace, pod.Name, err)
 			return errCreateBindingFailed
@@ -320,7 +320,7 @@ func (r registryImpl) bind(taskID string, pod *api.Pod) error {
 		patch.Metadata.Annotations = pod.Annotations
 		patchJson, _ := json.Marshal(patch)
 		log.V(4).Infof("Patching annotations %v of task %v pod %v/%v: %v", pod.Annotations, taskID, pod.Namespace, pod.Name, string(patchJson))
-		err := r.client.Patch(api.MergePatchType).RequestURI(pod.SelfLink).Body(patchJson).Do().Error()
+		err := r.client.CoreClient.Patch(api.MergePatchType).RequestURI(pod.SelfLink).Body(patchJson).Do().Error()
 		if err != nil {
 			log.Errorf("Error updating annotations of ready-to-launch task %v pod %v/%v: %v", taskID, pod.Namespace, pod.Name, err)
 			return errAnnotationUpdateFailure

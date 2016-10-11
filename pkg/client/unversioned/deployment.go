@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ type DeploymentInterface interface {
 	Update(*extensions.Deployment) (*extensions.Deployment, error)
 	UpdateStatus(*extensions.Deployment) (*extensions.Deployment, error)
 	Watch(opts api.ListOptions) (watch.Interface, error)
+	Rollback(*extensions.DeploymentRollback) error
 }
 
 // deployments implements DeploymentInterface
@@ -43,6 +44,9 @@ type deployments struct {
 	client *ExtensionsClient
 	ns     string
 }
+
+// Ensure statically that deployments implements DeploymentInterface.
+var _ DeploymentInterface = &deployments{}
 
 // newDeployments returns a Deployments
 func newDeployments(c *ExtensionsClient, namespace string) *deployments {
@@ -55,7 +59,7 @@ func newDeployments(c *ExtensionsClient, namespace string) *deployments {
 // List takes label and field selectors, and returns the list of Deployments that match those selectors.
 func (c *deployments) List(opts api.ListOptions) (result *extensions.DeploymentList, err error) {
 	result = &extensions.DeploymentList{}
-	err = c.client.Get().Namespace(c.ns).Resource("deployments").VersionedParams(&opts, api.Scheme).Do().Into(result)
+	err = c.client.Get().Namespace(c.ns).Resource("deployments").VersionedParams(&opts, api.ParameterCodec).Do().Into(result)
 	return
 }
 
@@ -97,6 +101,11 @@ func (c *deployments) Watch(opts api.ListOptions) (watch.Interface, error) {
 		Prefix("watch").
 		Namespace(c.ns).
 		Resource("deployments").
-		VersionedParams(&opts, api.Scheme).
+		VersionedParams(&opts, api.ParameterCodec).
 		Watch()
+}
+
+// Rollback applied the provided DeploymentRollback to the named deployment in the current namespace.
+func (c *deployments) Rollback(deploymentRollback *extensions.DeploymentRollback) error {
+	return c.client.Post().Namespace(c.ns).Resource("deployments").Name(deploymentRollback.Name).SubResource("rollback").Body(deploymentRollback).Do().Error()
 }

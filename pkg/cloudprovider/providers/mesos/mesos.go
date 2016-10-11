@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,9 +23,11 @@ import (
 	"net"
 	"regexp"
 
+	"golang.org/x/net/context"
+
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/detector"
-	"golang.org/x/net/context"
+
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 )
@@ -213,6 +215,11 @@ func (c *MesosCloud) ExternalID(instance string) (string, error) {
 
 // InstanceID returns the cloud provider ID of the specified instance.
 func (c *MesosCloud) InstanceID(name string) (string, error) {
+	return "", nil
+}
+
+// InstanceType returns the type of the specified instance.
+func (c *MesosCloud) InstanceType(name string) (string, error) {
 	return "", nil
 }
 

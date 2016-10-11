@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,20 +17,73 @@ limitations under the License.
 package deployment
 
 import (
+	"reflect"
 	"testing"
 
-	_ "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/apis/extensions"
-	"k8s.io/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/runtime"
 )
 
 func TestSelectableFieldLabelConversions(t *testing.T) {
 	apitesting.TestSelectableFieldLabelConversionsOfKind(t,
 		testapi.Extensions.GroupVersion().String(),
 		"Deployment",
-		labels.Set(DeploymentToSelectableFields(&extensions.Deployment{})),
+		DeploymentToSelectableFields(&extensions.Deployment{}),
 		nil,
 	)
+}
+
+func TestStatusUpdates(t *testing.T) {
+	tests := []struct {
+		old      runtime.Object
+		obj      runtime.Object
+		expected runtime.Object
+	}{
+		{
+			old:      newDeployment(map[string]string{"test": "label"}, map[string]string{"test": "annotation"}),
+			obj:      newDeployment(map[string]string{"test": "label", "sneaky": "label"}, map[string]string{"test": "annotation"}),
+			expected: newDeployment(map[string]string{"test": "label"}, map[string]string{"test": "annotation"}),
+		},
+		{
+			old:      newDeployment(map[string]string{"test": "label"}, map[string]string{"test": "annotation"}),
+			obj:      newDeployment(map[string]string{"test": "label"}, map[string]string{"test": "annotation", "sneaky": "annotation"}),
+			expected: newDeployment(map[string]string{"test": "label"}, map[string]string{"test": "annotation", "sneaky": "annotation"}),
+		},
+	}
+
+	for _, test := range tests {
+		deploymentStatusStrategy{}.PrepareForUpdate(api.NewContext(), test.obj, test.old)
+		if !reflect.DeepEqual(test.expected, test.obj) {
+			t.Errorf("Unexpected object mismatch! Expected:\n%#v\ngot:\n%#v", test.expected, test.obj)
+		}
+	}
+}
+
+func newDeployment(labels, annotations map[string]string) *extensions.Deployment {
+	return &extensions.Deployment{
+		ObjectMeta: api.ObjectMeta{
+			Name:        "test",
+			Labels:      labels,
+			Annotations: annotations,
+		},
+		Spec: extensions.DeploymentSpec{
+			Replicas: 1,
+			Strategy: extensions.DeploymentStrategy{
+				Type: extensions.RecreateDeploymentStrategyType,
+			},
+			Template: api.PodTemplateSpec{
+				Spec: api.PodSpec{
+					Containers: []api.Container{
+						{
+							Name:  "test",
+							Image: "test",
+						},
+					},
+				},
+			},
+		},
+	}
 }

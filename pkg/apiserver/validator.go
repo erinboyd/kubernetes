@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,14 +19,15 @@ package apiserver
 import (
 	"net/http"
 
+	"time"
+
 	"k8s.io/kubernetes/pkg/probe"
 	httpprober "k8s.io/kubernetes/pkg/probe/http"
 	utilnet "k8s.io/kubernetes/pkg/util/net"
-	"time"
 )
 
 const (
-	probeTimeOut = time.Minute
+	probeTimeOut = 20 * time.Second
 )
 
 // TODO: this basic interface is duplicated in N places.  consolidate?
@@ -59,7 +60,7 @@ func (server *Server) DoServerCheck(prober httpprober.HTTPProber) (probe.Result,
 	}
 	url := utilnet.FormatURL(scheme, server.Addr, server.Port, server.Path)
 
-	result, data, err := prober.Probe(url, probeTimeOut)
+	result, data, err := prober.Probe(url, nil, probeTimeOut)
 
 	if err != nil {
 		return probe.Unknown, "", err

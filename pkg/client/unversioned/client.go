@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +20,9 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"k8s.io/kubernetes/pkg/client/restclient"
+	"k8s.io/kubernetes/pkg/client/typed/discovery"
 )
 
 // Interface holds the methods for clients of Kubernetes,
@@ -40,8 +43,16 @@ type Interface interface {
 	PersistentVolumesInterface
 	PersistentVolumeClaimsNamespacer
 	ComponentStatusesInterface
+	ConfigMapsNamespacer
+	Apps() AppsInterface
+	Authorization() AuthorizationInterface
+	Autoscaling() AutoscalingInterface
+	Authentication() AuthenticationInterface
+	Batch() BatchInterface
 	Extensions() ExtensionsInterface
-	Discovery() DiscoveryInterface
+	Rbac() RbacInterface
+	Discovery() discovery.DiscoveryInterface
+	Certificates() CertificatesInterface
 }
 
 func (c *Client) ReplicationControllers(namespace string) ReplicationControllerInterface {
@@ -103,20 +114,23 @@ func (c *Client) ComponentStatuses() ComponentStatusInterface {
 	return newComponentStatuses(c)
 }
 
-// Client is the implementation of a Kubernetes client.
-type Client struct {
-	*RESTClient
-	*ExtensionsClient
-	*DiscoveryClient
+func (c *Client) ConfigMaps(namespace string) ConfigMapsInterface {
+	return newConfigMaps(c, namespace)
 }
 
-func stringDoesntExistIn(str string, slice []string) bool {
-	for _, s := range slice {
-		if s == str {
-			return false
-		}
-	}
-	return true
+// Client is the implementation of a Kubernetes client.
+type Client struct {
+	*restclient.RESTClient
+	*AuthorizationClient
+	*AutoscalingClient
+	*AuthenticationClient
+	*BatchClient
+	*ExtensionsClient
+	*AppsClient
+	*PolicyClient
+	*RbacClient
+	*discovery.DiscoveryClient
+	*CertificatesClient
 }
 
 // IsTimeout tests if this is a timeout error in the underlying transport.
@@ -141,10 +155,42 @@ func IsTimeout(err error) bool {
 	return false
 }
 
+func (c *Client) Authorization() AuthorizationInterface {
+	return c.AuthorizationClient
+}
+
+func (c *Client) Autoscaling() AutoscalingInterface {
+	return c.AutoscalingClient
+}
+
+func (c *Client) Authentication() AuthenticationInterface {
+	return c.AuthenticationClient
+}
+
+func (c *Client) Batch() BatchInterface {
+	return c.BatchClient
+}
+
 func (c *Client) Extensions() ExtensionsInterface {
 	return c.ExtensionsClient
 }
 
-func (c *Client) Discovery() DiscoveryInterface {
+func (c *Client) Apps() AppsInterface {
+	return c.AppsClient
+}
+
+func (c *Client) Rbac() RbacInterface {
+	return c.RbacClient
+}
+
+func (c *Client) Policy() PolicyInterface {
+	return c.PolicyClient
+}
+
+func (c *Client) Discovery() discovery.DiscoveryInterface {
 	return c.DiscoveryClient
+}
+
+func (c *Client) Certificates() CertificatesInterface {
+	return c.CertificatesClient
 }

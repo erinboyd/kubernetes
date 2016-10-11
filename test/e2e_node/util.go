@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,32 +17,46 @@ limitations under the License.
 package e2e_node
 
 import (
-	"time"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"strings"
+
+	"k8s.io/kubernetes/pkg/kubelet/api/v1alpha1/stats"
 )
 
-// RetryFn represents a retryable test condition.  It returns an error if the condition is not met
-// otherwise returns nil for success.
-type RetryFn func() error
+// TODO(random-liu): Get this automatically from kubelet flag.
+var kubeletAddress = flag.String("kubelet-address", "http://127.0.0.1:10255", "Host and port of the kubelet")
 
-// Retry retries the RetryFn for a maximum of maxWait time.  The wait duration is waited between
-// retries.  If the success condition is not met in maxWait time, the list of encountered errors
-// is returned.  If successful returns an empty list.
-// Example:
-// Expect(Retry(time.Minute*1, time.Second*2, func() error {
-//    if success {
-//      return nil
-//    } else {
-//      return errors.New("Failed")
-//    }
-// }).To(BeNil(), fmt.Sprintf("Failed"))
-func Retry(maxWait time.Duration, wait time.Duration, retry RetryFn) []error {
-	errs := []error{}
-	for start := time.Now(); time.Now().Before(start.Add(maxWait)); {
-		if err := retry(); err != nil {
-			errs = append(errs, err)
-		} else {
-			return []error{}
-		}
+var startServices = flag.Bool("start-services", true, "If true, start local node services")
+var stopServices = flag.Bool("stop-services", true, "If true, stop local node services after running tests")
+
+func getNodeSummary() (*stats.Summary, error) {
+	req, err := http.NewRequest("GET", *kubeletAddress+"/stats/summary", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build http request: %v", err)
 	}
-	return errs
+	req.Header.Add("Accept", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get /stats/summary: %v", err)
+	}
+
+	defer resp.Body.Close()
+	contentsBytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read /stats/summary: %+v", resp)
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(string(contentsBytes)))
+	summary := stats.Summary{}
+	err = decoder.Decode(&summary)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse /stats/summary to go struct: %+v", resp)
+	}
+	return &summary, nil
 }

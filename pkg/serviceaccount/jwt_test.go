@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,8 +26,8 @@ import (
 	"github.com/dgrijalva/jwt-go"
 
 	"k8s.io/kubernetes/pkg/api"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
+	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 	serviceaccountcontroller "k8s.io/kubernetes/pkg/controller/serviceaccount"
 	"k8s.io/kubernetes/pkg/serviceaccount"
 )
@@ -100,11 +100,11 @@ func TestReadPrivateKey(t *testing.T) {
 	defer os.Remove(f.Name())
 
 	if err := ioutil.WriteFile(f.Name(), []byte(privateKey), os.FileMode(0600)); err != nil {
-		t.Fatalf("error creating tmpfile: %v", err)
+		t.Fatalf("error writing private key to tmpfile: %v", err)
 	}
 
 	if _, err := serviceaccount.ReadPrivateKey(f.Name()); err != nil {
-		t.Fatalf("error reading key: %v", err)
+		t.Fatalf("error reading private key: %v", err)
 	}
 }
 
@@ -116,11 +116,11 @@ func TestReadPublicKey(t *testing.T) {
 	defer os.Remove(f.Name())
 
 	if err := ioutil.WriteFile(f.Name(), []byte(publicKey), os.FileMode(0600)); err != nil {
-		t.Fatalf("error creating tmpfile: %v", err)
+		t.Fatalf("error writing public key to tmpfile: %v", err)
 	}
 
 	if _, err := serviceaccount.ReadPublicKey(f.Name()); err != nil {
-		t.Fatalf("error reading key: %v", err)
+		t.Fatalf("error reading public key: %v", err)
 	}
 }
 
@@ -159,7 +159,7 @@ func TestTokenGenerateAndValidate(t *testing.T) {
 	}
 
 	testCases := map[string]struct {
-		Client client.Interface
+		Client clientset.Interface
 		Keys   []*rsa.PublicKey
 
 		ExpectedErr      bool
@@ -199,7 +199,7 @@ func TestTokenGenerateAndValidate(t *testing.T) {
 			ExpectedGroups:   []string{"system:serviceaccounts", "system:serviceaccounts:test"},
 		},
 		"valid lookup": {
-			Client:           testclient.NewSimpleFake(serviceAccount, secret),
+			Client:           fake.NewSimpleClientset(serviceAccount, secret),
 			Keys:             []*rsa.PublicKey{getPublicKey(publicKey)},
 			ExpectedErr:      false,
 			ExpectedOK:       true,
@@ -208,13 +208,13 @@ func TestTokenGenerateAndValidate(t *testing.T) {
 			ExpectedGroups:   []string{"system:serviceaccounts", "system:serviceaccounts:test"},
 		},
 		"invalid secret lookup": {
-			Client:      testclient.NewSimpleFake(serviceAccount),
+			Client:      fake.NewSimpleClientset(serviceAccount),
 			Keys:        []*rsa.PublicKey{getPublicKey(publicKey)},
 			ExpectedErr: true,
 			ExpectedOK:  false,
 		},
 		"invalid serviceaccount lookup": {
-			Client:      testclient.NewSimpleFake(secret),
+			Client:      fake.NewSimpleClientset(secret),
 			Keys:        []*rsa.PublicKey{getPublicKey(publicKey)},
 			ExpectedErr: true,
 			ExpectedOK:  false,
@@ -224,6 +224,12 @@ func TestTokenGenerateAndValidate(t *testing.T) {
 	for k, tc := range testCases {
 		getter := serviceaccountcontroller.NewGetterFromClient(tc.Client)
 		authenticator := serviceaccount.JWTTokenAuthenticator(tc.Keys, tc.Client != nil, getter)
+
+		// An invalid, non-JWT token should always fail
+		if _, ok, err := authenticator.AuthenticateToken("invalid token"); err != nil || ok {
+			t.Errorf("%s: Expected err=nil, ok=false for non-JWT token", k)
+			continue
+		}
 
 		user, ok, err := authenticator.AuthenticateToken(token)
 		if (err != nil) != tc.ExpectedErr {

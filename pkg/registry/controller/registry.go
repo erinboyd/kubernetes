@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,6 +13,8 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
+// If you make changes to this file, you should also make the corresponding change in ReplicaSet.
 
 package controller
 
@@ -77,7 +79,7 @@ func (s *storage) CreateController(ctx api.Context, controller *api.ReplicationC
 }
 
 func (s *storage) UpdateController(ctx api.Context, controller *api.ReplicationController) (*api.ReplicationController, error) {
-	obj, _, err := s.Update(ctx, controller)
+	obj, _, err := s.Update(ctx, controller.Name, rest.DefaultUpdatedObjectInfo(controller, api.Scheme))
 	if err != nil {
 		return nil, err
 	}

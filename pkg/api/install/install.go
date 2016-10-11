@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,14 +24,13 @@ import (
 	"github.com/golang/glog"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apimachinery"
-	"k8s.io/kubernetes/pkg/apimachinery/registered"
-	"k8s.io/kubernetes/pkg/util/sets"
-
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/apimachinery"
+	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/util/sets"
 )
 
 const importPrefix = "k8s.io/kubernetes/pkg/api"
@@ -75,7 +74,6 @@ func enableVersions(externalVersions []unversioned.GroupVersion) error {
 	groupMeta := apimachinery.GroupMeta{
 		GroupVersion:  preferredExternalVersion,
 		GroupVersions: externalVersions,
-		Codec:         runtime.CodecFor(api.Scheme, preferredExternalVersion),
 		RESTMapper:    newRESTMapper(externalVersions),
 		SelfLinker:    runtime.SelfLinker(accessor),
 		InterfacesFor: interfacesFor,
@@ -110,6 +108,8 @@ func newRESTMapper(externalVersions []unversioned.GroupVersion) meta.RESTMapper 
 		"PodExecOptions",
 		"PodAttachOptions",
 		"PodProxyOptions",
+		"NodeProxyOptions",
+		"ServiceProxyOptions",
 		"ThirdPartyResource",
 		"ThirdPartyResourceData",
 		"ThirdPartyResourceList")
@@ -127,7 +127,6 @@ func interfacesFor(version unversioned.GroupVersion) (*meta.VersionInterfaces, e
 	switch version {
 	case v1.SchemeGroupVersion:
 		return &meta.VersionInterfaces{
-			Codec:            v1.Codec,
 			ObjectConvertor:  api.Scheme,
 			MetadataAccessor: accessor,
 		}, nil
@@ -139,7 +138,10 @@ func interfacesFor(version unversioned.GroupVersion) (*meta.VersionInterfaces, e
 
 func addVersionsToScheme(externalVersions ...unversioned.GroupVersion) {
 	// add the internal version to Scheme
-	api.AddToScheme(api.Scheme)
+	if err := api.AddToScheme(api.Scheme); err != nil {
+		// Programmer error, detect immediately
+		panic(err)
+	}
 	// add the enabled external versions to Scheme
 	for _, v := range externalVersions {
 		if !registered.IsEnabledVersion(v) {
@@ -148,7 +150,10 @@ func addVersionsToScheme(externalVersions ...unversioned.GroupVersion) {
 		}
 		switch v {
 		case v1.SchemeGroupVersion:
-			v1.AddToScheme(api.Scheme)
+			if err := v1.AddToScheme(api.Scheme); err != nil {
+				// Programmer error, detect immediately
+				panic(err)
+			}
 		}
 	}
 }

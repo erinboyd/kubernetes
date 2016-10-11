@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,12 +17,12 @@ limitations under the License.
 package strategicpatch
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
 
-	forkedjson "k8s.io/kubernetes/third_party/forked/json"
+	"k8s.io/kubernetes/pkg/util/json"
+	forkedjson "k8s.io/kubernetes/third_party/forked/golang/json"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ghodss/yaml"
@@ -432,7 +432,7 @@ loopB:
 	if !ignoreChangesAndAdditions {
 		// Add any remaining items found only in modified
 		for ; modifiedIndex < len(modifiedSorted); modifiedIndex++ {
-			patch = append(patch, modified[modifiedIndex])
+			patch = append(patch, modifiedSorted[modifiedIndex])
 		}
 	}
 
