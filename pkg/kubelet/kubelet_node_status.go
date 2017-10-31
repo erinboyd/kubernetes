@@ -97,7 +97,7 @@ func (kl *Kubelet) registerWithAPIServer() {
 // a different externalID value, it attempts to delete that node so that a
 // later attempt can recreate it.
 func (kl *Kubelet) tryRegisterWithAPIServer(node *v1.Node) bool {
-	_, err := kl.kubeClient.Core().Nodes().Create(node)
+	_, err := kl.kubeClient.CoreV1().Nodes().Create(node)
 	if err == nil {
 		return true
 	}
@@ -107,7 +107,7 @@ func (kl *Kubelet) tryRegisterWithAPIServer(node *v1.Node) bool {
 		return false
 	}
 
-	existingNode, err := kl.kubeClient.Core().Nodes().Get(string(kl.nodeName), metav1.GetOptions{})
+	existingNode, err := kl.kubeClient.CoreV1().Nodes().Get(string(kl.nodeName), metav1.GetOptions{})
 	if err != nil {
 		glog.Errorf("Unable to register node %q with API server: error getting existing node: %v", kl.nodeName, err)
 		return false
@@ -146,7 +146,7 @@ func (kl *Kubelet) tryRegisterWithAPIServer(node *v1.Node) bool {
 		"Previously node %q had externalID %q; now it is %q; will delete and recreate.",
 		kl.nodeName, node.Spec.ExternalID, existingNode.Spec.ExternalID,
 	)
-	if err := kl.kubeClient.Core().Nodes().Delete(node.Name, nil); err != nil {
+	if err := kl.kubeClient.CoreV1().Nodes().Delete(node.Name, nil); err != nil {
 		glog.Errorf("Unable to register node %q with API server: error deleting old node: %v", kl.nodeName, err)
 	} else {
 		glog.Infof("Deleted old node object %q", kl.nodeName)
@@ -169,6 +169,10 @@ func (kl *Kubelet) updateDefaultLabels(initialNode, existingNode *v1.Node) bool 
 	var needsUpdate bool = false
 	//Set default labels but make sure to not set labels with empty values
 	for _, label := range defaultLabels {
+		if _, hasInitialValue := initialNode.Labels[label]; !hasInitialValue {
+			continue
+		}
+
 		if existingNode.Labels[label] != initialNode.Labels[label] {
 			existingNode.Labels[label] = initialNode.Labels[label]
 			needsUpdate = true
@@ -272,7 +276,7 @@ func (kl *Kubelet) initialNode() (*v1.Node, error) {
 		glog.Infof("Controller attach/detach is disabled for this node; Kubelet will attach and detach volumes")
 	}
 
-	if kl.kubeletConfiguration.KeepTerminatedPodVolumes {
+	if kl.keepTerminatedPodVolumes {
 		if node.Annotations == nil {
 			node.Annotations = make(map[string]string)
 		}

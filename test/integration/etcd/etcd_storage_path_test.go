@@ -50,6 +50,7 @@ import (
 	"k8s.io/kubernetes/cmd/kube-apiserver/app"
 	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/test/integration/framework"
 
@@ -377,9 +378,6 @@ var etcdStorageData = map[schema.GroupVersionResource]struct {
 // Be very careful when whitelisting an object as ephemeral.
 // Doing so removes the safety we gain from this test by skipping that object.
 var ephemeralWhiteList = createEphemeralWhiteList(
-	// k8s.io/kubernetes/federation/apis/federation/v1beta1
-	gvr("federation", "v1beta1", "clusters"), // we cannot create this
-	// --
 
 	// k8s.io/kubernetes/pkg/api/v1
 	gvr("", "v1", "bindings"),             // annotation on pod, not stored in etcd
@@ -514,7 +512,7 @@ func TestEtcdStoragePath(t *testing.T) {
 	ephemeralSeen := map[schema.GroupVersionResource]empty{}
 	cohabitatingResources := map[string]map[schema.GroupVersionKind]empty{}
 
-	for gvk, apiType := range kapi.Scheme.AllKnownTypes() {
+	for gvk, apiType := range legacyscheme.Scheme.AllKnownTypes() {
 		// we do not care about internal objects or lists // TODO make sure this is always true
 		if gvk.Version == runtime.APIVersionInternal || strings.HasSuffix(apiType.Name(), "List") {
 			continue
@@ -725,7 +723,7 @@ func startRealMasterOrDie(t *testing.T, certDir string) (*allClient, clientv3.KV
 		// make a copy so we can mutate it to set GroupVersion and NegotiatedSerializer
 		cfg := *kubeClientConfig
 		cfg.ContentConfig.GroupVersion = &schema.GroupVersion{}
-		cfg.ContentConfig.NegotiatedSerializer = kapi.Codecs
+		cfg.ContentConfig.NegotiatedSerializer = legacyscheme.Codecs
 		privilegedClient, err := restclient.RESTClientFor(&cfg)
 		if err != nil {
 			// this happens because we race the API server start
@@ -963,7 +961,7 @@ func (c *allClient) createPrerequisites(mapper meta.RESTMapper, ns string, prere
 }
 
 func newClient(config restclient.Config) (*allClient, error) {
-	config.ContentConfig.NegotiatedSerializer = kapi.Codecs
+	config.ContentConfig.NegotiatedSerializer = legacyscheme.Codecs
 	config.ContentConfig.ContentType = "application/json"
 	config.Timeout = 30 * time.Second
 	config.RateLimiter = flowcontrol.NewTokenBucketRateLimiter(3, 10)

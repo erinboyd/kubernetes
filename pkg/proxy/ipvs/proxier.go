@@ -46,6 +46,7 @@ import (
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/proxy"
 	"k8s.io/kubernetes/pkg/proxy/healthcheck"
+	"k8s.io/kubernetes/pkg/proxy/metrics"
 	utilproxy "k8s.io/kubernetes/pkg/proxy/util"
 	"k8s.io/kubernetes/pkg/util/async"
 	utiliptables "k8s.io/kubernetes/pkg/util/iptables"
@@ -134,6 +135,8 @@ type Proxier struct {
 	iptablesData *bytes.Buffer
 	natChains    *bytes.Buffer
 	natRules     *bytes.Buffer
+	// Added as a member to the struct to allow injection for testing.
+	netlinkHandle NetLinkHandle
 }
 
 // IPGetter helps get node network interface IP
@@ -270,6 +273,7 @@ func NewProxier(ipt utiliptables.Interface, ipvs utilipvs.Interface,
 		iptablesData:     bytes.NewBuffer(nil),
 		natChains:        bytes.NewBuffer(nil),
 		natRules:         bytes.NewBuffer(nil),
+		netlinkHandle:    NewNetLinkHandle(),
 	}
 	burstSyncs := 2
 	glog.V(3).Infof("minSyncPeriod: %v, syncPeriod: %v, burstSyncs: %d", minSyncPeriod, syncPeriod, burstSyncs)
@@ -478,10 +482,7 @@ func (e *endpointsInfo) String() string {
 
 // IPPart returns just the IP part of the endpoint.
 func (e *endpointsInfo) IPPart() string {
-	if index := strings.Index(e.endpoint, ":"); index != -1 {
-		return e.endpoint[0:index]
-	}
-	return e.endpoint
+	return utilproxy.IPPart(e.endpoint)
 }
 
 type endpointServicePair struct {
@@ -854,12 +855,6 @@ func (proxier *Proxier) OnEndpointsSynced() {
 	proxier.syncProxyRules()
 }
 
-type syncReason string
-
-const syncReasonServices syncReason = "ServicesUpdate"
-const syncReasonEndpoints syncReason = "EndpointsUpdate"
-const syncReasonForce syncReason = "Force"
-
 // This is where all of the ipvs calls happen.
 // assumes proxier.mu is held
 func (proxier *Proxier) syncProxyRules() {
@@ -868,6 +863,7 @@ func (proxier *Proxier) syncProxyRules() {
 
 	start := time.Now()
 	defer func() {
+		metrics.SyncProxyRulesLatency.Observe(metrics.SinceInMicroseconds(start))
 		glog.V(4).Infof("syncProxyRules took %v", time.Since(start))
 	}()
 	// don't sync rules till we've received services and endpoints
@@ -1262,7 +1258,7 @@ func (proxier *Proxier) syncProxyRules() {
 func (proxier *Proxier) deleteEndpointConnections(connectionMap map[endpointServicePair]bool) {
 	for epSvcPair := range connectionMap {
 		if svcInfo, ok := proxier.serviceMap[epSvcPair.servicePortName]; ok && svcInfo.protocol == api.ProtocolUDP {
-			endpointIP := epSvcPair.endpoint[0:strings.Index(epSvcPair.endpoint, ":")]
+			endpointIP := utilproxy.IPPart(epSvcPair.endpoint)
 			err := utilproxy.ClearUDPConntrackForPeers(proxier.exec, svcInfo.clusterIP.String(), endpointIP)
 			if err != nil {
 				glog.Errorf("Failed to delete %s endpoint connections, error: %v", epSvcPair.servicePortName.String(), err)
@@ -1295,7 +1291,7 @@ func (proxier *Proxier) syncService(svcName string, vs *utilipvs.VirtualServer, 
 	// bind service address to dummy interface even if service not changed,
 	// in case that service IP was removed by other processes
 	if bindAddr {
-		_, err := proxier.ipvs.EnsureVirtualServerAddressBind(vs, DefaultDummyDevice)
+		_, err := proxier.netlinkHandle.EnsureAddressBind(vs.Address.String(), DefaultDummyDevice)
 		if err != nil {
 			glog.Errorf("Failed to bind service address to dummy device %q: %v", svcName, err)
 			return err
@@ -1384,6 +1380,7 @@ func (proxier *Proxier) syncEndpoint(svcPortName proxy.ServicePortName, onlyNode
 }
 
 func (proxier *Proxier) cleanLegacyService(atciveServices map[string]bool, currentServices map[string]*utilipvs.VirtualServer) {
+	unbindIPAddr := sets.NewString()
 	for cS := range currentServices {
 		if !atciveServices[cS] {
 			svc := currentServices[cS]
@@ -1391,10 +1388,14 @@ func (proxier *Proxier) cleanLegacyService(atciveServices map[string]bool, curre
 			if err != nil {
 				glog.Errorf("Failed to delete service, error: %v", err)
 			}
-			err = proxier.ipvs.UnbindVirtualServerAddress(svc, DefaultDummyDevice)
-			if err != nil {
-				glog.Errorf("Failed to unbind service from dummy interface, error: %v", err)
-			}
+			unbindIPAddr.Insert(svc.Address.String())
+		}
+	}
+
+	for _, addr := range unbindIPAddr.UnsortedList() {
+		err := proxier.netlinkHandle.UnbindAddress(addr, DefaultDummyDevice)
+		if err != nil {
+			glog.Errorf("Failed to unbind service from dummy interface, error: %v", err)
 		}
 	}
 }

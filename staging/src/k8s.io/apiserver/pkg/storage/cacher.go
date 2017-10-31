@@ -468,10 +468,15 @@ func (c *Cacher) GetToList(ctx context.Context, key string, resourceVersion stri
 // Implements storage.Interface.
 func (c *Cacher) List(ctx context.Context, key string, resourceVersion string, pred SelectionPredicate, listObj runtime.Object) error {
 	pagingEnabled := utilfeature.DefaultFeatureGate.Enabled(features.APIListChunking)
-	if resourceVersion == "" || (pagingEnabled && (len(pred.Continue) > 0 || pred.Limit > 0)) {
+	hasContinuation := pagingEnabled && len(pred.Continue) > 0
+	hasLimit := pagingEnabled && pred.Limit > 0 && resourceVersion != "0"
+	if resourceVersion == "" || hasContinuation || hasLimit {
 		// If resourceVersion is not specified, serve it from underlying
-		// storage (for backward compatibility). If a continuation or limit is
+		// storage (for backward compatibility). If a continuation is
 		// requested, serve it from the underlying storage as well.
+		// Limits are only sent to storage when resourceVersion is non-zero
+		// since the watch cache isn't able to perform continuations, and
+		// limits are ignored when resource version is zero.
 		return c.storage.List(ctx, key, resourceVersion, pred, listObj)
 	}
 
@@ -644,6 +649,12 @@ func (c *Cacher) isStopped() bool {
 }
 
 func (c *Cacher) Stop() {
+	// TODO : Do not check for isStopped (and return) when PR
+	// https://github.com/kubernetes/kubernetes/pull/50690
+	// merges as that shuts down storage properly
+	if c.isStopped() {
+		return
+	}
 	c.stopLock.Lock()
 	c.stopped = true
 	c.stopLock.Unlock()

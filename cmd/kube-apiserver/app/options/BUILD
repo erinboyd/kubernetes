@@ -13,6 +13,7 @@ go_library(
         "plugins.go",
         "validation.go",
     ],
+    importpath = "k8s.io/kubernetes/cmd/kube-apiserver/app/options",
     deps = [
         "//pkg/api:go_default_library",
         "//pkg/api/validation:go_default_library",
@@ -47,7 +48,6 @@ go_library(
         "//plugin/pkg/admission/securitycontext/scdeny:go_default_library",
         "//plugin/pkg/admission/serviceaccount:go_default_library",
         "//plugin/pkg/admission/storageclass/setdefault:go_default_library",
-        "//plugin/pkg/admission/webhook:go_default_library",
         "//vendor/github.com/spf13/pflag:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/util/net:go_default_library",
         "//vendor/k8s.io/apiserver/pkg/admission:go_default_library",
@@ -59,9 +59,11 @@ go_library(
 go_test(
     name = "go_default_test",
     srcs = ["options_test.go"],
+    importpath = "k8s.io/kubernetes/cmd/kube-apiserver/app/options",
     library = ":go_default_library",
     deps = [
         "//pkg/api:go_default_library",
+        "//pkg/api/legacyscheme:go_default_library",
         "//pkg/kubeapiserver/options:go_default_library",
         "//pkg/kubelet/client:go_default_library",
         "//pkg/master/reconcilers:go_default_library",

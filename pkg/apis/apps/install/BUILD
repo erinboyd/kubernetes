@@ -8,8 +8,9 @@ load(
 go_library(
     name = "go_default_library",
     srcs = ["install.go"],
+    importpath = "k8s.io/kubernetes/pkg/apis/apps/install",
     deps = [
-        "//pkg/api:go_default_library",
+        "//pkg/api/legacyscheme:go_default_library",
         "//pkg/apis/apps:go_default_library",
         "//pkg/apis/apps/v1:go_default_library",
         "//pkg/apis/apps/v1beta1:go_default_library",

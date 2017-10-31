@@ -167,6 +167,7 @@ filegroup(
         "//staging/src/k8s.io/client-go/plugin/pkg/auth/authenticator/token/oidc/testing:all-srcs",
         "//staging/src/k8s.io/client-go/plugin/pkg/client/auth:all-srcs",
         "//staging/src/k8s.io/client-go/rest:all-srcs",
+        "//staging/src/k8s.io/client-go/scale:all-srcs",
         "//staging/src/k8s.io/client-go/testing:all-srcs",
         "//staging/src/k8s.io/client-go/third_party/forked/golang/template:all-srcs",
         "//staging/src/k8s.io/client-go/tools/auth:all-srcs",
@@ -208,6 +209,7 @@ filegroup(
         "//staging/src/k8s.io/metrics/pkg/client/clientset_generated/clientset:all-srcs",
         "//staging/src/k8s.io/metrics/pkg/client/custom_metrics:all-srcs",
         "//staging/src/k8s.io/sample-apiserver:all-srcs",
+        "//staging/src/k8s.io/sample-controller:all-srcs",
     ],
     tags = ["automanaged"],
 )

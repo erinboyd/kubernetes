@@ -210,7 +210,6 @@ __custom_func() {
     * certificatesigningrequests (aka 'csr')
     * clusterrolebindings
     * clusterroles
-    * clusters (valid only for federation apiservers)
     * componentstatuses (aka 'cs')
     * configmaps (aka 'cm')
     * controllerrevisions
@@ -242,8 +241,8 @@ __custom_func() {
     * secrets
     * serviceaccounts (aka 'sa')
     * services (aka 'svc')
-    * statefulsets
-    * storageclasses
+    * statefulsets (aka 'sts')
+    * storageclasses (aka 'sc')
 
 `
 )

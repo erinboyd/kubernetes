@@ -169,12 +169,12 @@ func TestCheckOpenStackOpts(t *testing.T) {
 					SubnetId:             "6261548e-ffde-4bc7-bd22-59c83578c5ef",
 					FloatingNetworkId:    "38b8b5f9-64dc-4424-bf86-679595714786",
 					LBMethod:             "ROUND_ROBIN",
+					LBProvider:           "haproxy",
 					CreateMonitor:        true,
 					MonitorDelay:         delay,
 					MonitorTimeout:       timeout,
 					MonitorMaxRetries:    uint(3),
 					ManageSecurityGroups: true,
-					NodeSecurityGroupID:  "b41d28c2-d02f-4e1e-8ffb-23b8e4f5c144",
 				},
 				metadataOpts: MetadataOpts{
 					SearchOrder: configDriveID,
@@ -195,7 +195,6 @@ func TestCheckOpenStackOpts(t *testing.T) {
 					MonitorTimeout:       timeout,
 					MonitorMaxRetries:    uint(3),
 					ManageSecurityGroups: true,
-					NodeSecurityGroupID:  "b41d28c2-d02f-4e1e-8ffb-23b8e4f5c144",
 				},
 				metadataOpts: MetadataOpts{
 					SearchOrder: configDriveID,
@@ -214,7 +213,6 @@ func TestCheckOpenStackOpts(t *testing.T) {
 					LBMethod:             "ROUND_ROBIN",
 					CreateMonitor:        true,
 					ManageSecurityGroups: true,
-					NodeSecurityGroupID:  "b41d28c2-d02f-4e1e-8ffb-23b8e4f5c144",
 				},
 				metadataOpts: MetadataOpts{
 					SearchOrder: configDriveID,
@@ -226,53 +224,32 @@ func TestCheckOpenStackOpts(t *testing.T) {
 			name: "test4",
 			openstackOpts: &OpenStack{
 				provider: nil,
-				lbOpts: LoadBalancerOpts{
-					LBVersion:            "v2",
-					SubnetId:             "6261548e-ffde-4bc7-bd22-59c83578c5ef",
-					FloatingNetworkId:    "38b8b5f9-64dc-4424-bf86-679595714786",
-					LBMethod:             "ROUND_ROBIN",
-					CreateMonitor:        true,
-					MonitorDelay:         delay,
-					MonitorTimeout:       timeout,
-					MonitorMaxRetries:    uint(3),
-					ManageSecurityGroups: true,
-				},
 				metadataOpts: MetadataOpts{
-					SearchOrder: configDriveID,
+					SearchOrder: "",
 				},
 			},
-			expectedError: fmt.Errorf("node-security-group not set in cloud provider config"),
+			expectedError: fmt.Errorf("invalid value in section [Metadata] with key `search-order`. Value cannot be empty"),
 		},
 		{
 			name: "test5",
 			openstackOpts: &OpenStack{
 				provider: nil,
 				metadataOpts: MetadataOpts{
-					SearchOrder: "",
+					SearchOrder: "value1,value2,value3",
 				},
 			},
-			expectedError: fmt.Errorf("Invalid value in section [Metadata] with key `search-order`. Value cannot be empty"),
+			expectedError: fmt.Errorf("invalid value in section [Metadata] with key `search-order`. Value cannot contain more than 2 elements"),
 		},
 		{
 			name: "test6",
 			openstackOpts: &OpenStack{
 				provider: nil,
 				metadataOpts: MetadataOpts{
-					SearchOrder: "value1,value2,value3",
-				},
-			},
-			expectedError: fmt.Errorf("Invalid value in section [Metadata] with key `search-order`. Value cannot contain more than 2 elements"),
-		},
-		{
-			name: "test7",
-			openstackOpts: &OpenStack{
-				provider: nil,
-				metadataOpts: MetadataOpts{
 					SearchOrder: "value1",
 				},
 			},
-			expectedError: fmt.Errorf("Invalid element '%s' found in section [Metadata] with key `search-order`."+
-				"Supported elements include '%s' and '%s'", "value1", configDriveID, metadataID),
+			expectedError: fmt.Errorf("invalid element %q found in section [Metadata] with key `search-order`."+
+				"Supported elements include %q and %q", "value1", configDriveID, metadataID),
 		},
 	}
 

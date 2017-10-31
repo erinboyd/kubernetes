@@ -17,6 +17,7 @@ limitations under the License.
 package cmd
 
 import (
+	"archive/tar"
 	"bytes"
 	"io"
 	"io/ioutil"
@@ -24,7 +25,15 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strings"
 	"testing"
+)
+
+type FileType int
+
+const (
+	RegularFile FileType = 0
+	SymLink     FileType = 1
 )
 
 func TestExtractFileSpec(t *testing.T) {
@@ -117,24 +126,34 @@ func TestTarUntar(t *testing.T) {
 	}()
 
 	files := []struct {
-		name string
-		data string
+		name     string
+		data     string
+		fileType FileType
 	}{
 		{
-			name: "foo",
-			data: "foobarbaz",
+			name:     "foo",
+			data:     "foobarbaz",
+			fileType: RegularFile,
 		},
 		{
-			name: "dir/blah",
-			data: "bazblahfoo",
+			name:     "dir/blah",
+			data:     "bazblahfoo",
+			fileType: RegularFile,
 		},
 		{
-			name: "some/other/directory",
-			data: "with more data here",
+			name:     "some/other/directory/",
+			data:     "with more data here",
+			fileType: RegularFile,
 		},
 		{
-			name: "blah",
-			data: "same file name different data",
+			name:     "blah",
+			data:     "same file name different data",
+			fileType: RegularFile,
+		},
+		{
+			name:     "gakki",
+			data:     "/tmp/gakki",
+			fileType: SymLink,
 		},
 	}
 
@@ -144,20 +163,32 @@ func TestTarUntar(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 			t.FailNow()
 		}
-		f, err := os.Create(filepath)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+		if file.fileType == RegularFile {
+			f, err := os.Create(filepath)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				t.FailNow()
+			}
+			defer f.Close()
+			if _, err := io.Copy(f, bytes.NewBuffer([]byte(file.data))); err != nil {
+				t.Errorf("unexpected error: %v", err)
+				t.FailNow()
+			}
+		} else if file.fileType == SymLink {
+			err := os.Symlink(file.data, filepath)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				t.FailNow()
+			}
+		} else {
+			t.Errorf("unexpected file type: %v", file)
 			t.FailNow()
 		}
-		defer f.Close()
-		if _, err := io.Copy(f, bytes.NewBuffer([]byte(file.data))); err != nil {
-			t.Errorf("unexpected error: %v", err)
-			t.FailNow()
-		}
+
 	}
 
 	writer := &bytes.Buffer{}
-	if err := makeTar(dir, writer); err != nil {
+	if err := makeTar(dir, dir, writer); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
@@ -168,16 +199,35 @@ func TestTarUntar(t *testing.T) {
 	}
 
 	for _, file := range files {
-		filepath := path.Join(dir, file.name)
-		f, err := os.Open(filepath)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		defer f.Close()
-		buff := &bytes.Buffer{}
-		io.Copy(buff, f)
-		if file.data != string(buff.Bytes()) {
-			t.Errorf("expected: %s, saw: %s", file.data, string(buff.Bytes()))
+		absPath := dir2 + strings.TrimPrefix(dir, os.TempDir())
+		filepath := path.Join(absPath, file.name)
+
+		if file.fileType == RegularFile {
+			f, err := os.Open(filepath)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+
+			defer f.Close()
+			buff := &bytes.Buffer{}
+			io.Copy(buff, f)
+
+			if file.data != string(buff.Bytes()) {
+				t.Errorf("expected: %s, saw: %s", file.data, string(buff.Bytes()))
+			}
+		} else if file.fileType == SymLink {
+			dest, err := os.Readlink(filepath)
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+
+			if file.data != dest {
+				t.Errorf("expected: %s, saw: %s", file.data, dest)
+			}
+		} else {
+			t.Errorf("unexpected file type: %v", file)
+			t.FailNow()
 		}
 	}
 }
@@ -291,4 +341,84 @@ func TestCopyToLocalFileOrDir(t *testing.T) {
 		}()
 	}
 
+}
+
+func TestTarDestinationName(t *testing.T) {
+	dir, err := ioutil.TempDir(os.TempDir(), "input")
+	dir2, err2 := ioutil.TempDir(os.TempDir(), "output")
+	if err != nil || err2 != nil {
+		t.Errorf("unexpected error: %v | %v", err, err2)
+		t.FailNow()
+	}
+	defer func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("Unexpected error cleaning up: %v", err)
+		}
+		if err := os.RemoveAll(dir2); err != nil {
+			t.Errorf("Unexpected error cleaning up: %v", err)
+		}
+	}()
+
+	files := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "foo",
+			data: "foobarbaz",
+		},
+		{
+			name: "dir/blah",
+			data: "bazblahfoo",
+		},
+		{
+			name: "some/other/directory",
+			data: "with more data here",
+		},
+		{
+			name: "blah",
+			data: "same file name different data",
+		},
+	}
+
+	// ensure files exist on disk
+	for _, file := range files {
+		filepath := path.Join(dir, file.name)
+		if err := os.MkdirAll(path.Dir(filepath), 0755); err != nil {
+			t.Errorf("unexpected error: %v", err)
+			t.FailNow()
+		}
+		f, err := os.Create(filepath)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+			t.FailNow()
+		}
+		defer f.Close()
+		if _, err := io.Copy(f, bytes.NewBuffer([]byte(file.data))); err != nil {
+			t.Errorf("unexpected error: %v", err)
+			t.FailNow()
+		}
+	}
+
+	reader, writer := io.Pipe()
+	go func() {
+		if err := makeTar(dir, dir2, writer); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}()
+
+	tarReader := tar.NewReader(reader)
+	for {
+		hdr, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			t.Errorf("unexpected error: %v", err)
+			t.FailNow()
+		}
+
+		if !strings.HasPrefix(hdr.Name, path.Base(dir2)) {
+			t.Errorf("expected %q as destination filename prefix, saw: %q", path.Base(dir2), hdr.Name)
+		}
+	}
 }

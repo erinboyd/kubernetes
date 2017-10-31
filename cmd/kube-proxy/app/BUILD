@@ -19,6 +19,7 @@ go_library(
         ],
         "//conditions:default": [],
     }),
+    importpath = "k8s.io/kubernetes/cmd/kube-proxy/app",
     deps = [
         "//pkg/api:go_default_library",
         "//pkg/api/validation:go_default_library",
@@ -35,6 +36,7 @@ go_library(
         "//pkg/proxy/healthcheck:go_default_library",
         "//pkg/proxy/iptables:go_default_library",
         "//pkg/proxy/ipvs:go_default_library",
+        "//pkg/proxy/metrics:go_default_library",
         "//pkg/proxy/userspace:go_default_library",
         "//pkg/util/configz:go_default_library",
         "//pkg/util/dbus:go_default_library",
@@ -66,6 +68,7 @@ go_library(
         "//vendor/k8s.io/apiserver/pkg/util/feature:go_default_library",
         "//vendor/k8s.io/client-go/kubernetes:go_default_library",
         "//vendor/k8s.io/client-go/kubernetes/typed/core/v1:go_default_library",
+        "//vendor/k8s.io/client-go/rest:go_default_library",
         "//vendor/k8s.io/client-go/tools/clientcmd:go_default_library",
         "//vendor/k8s.io/client-go/tools/clientcmd/api:go_default_library",
         "//vendor/k8s.io/client-go/tools/record:go_default_library",
@@ -86,6 +89,7 @@ go_test(
         "server_test.go",
         "validation_test.go",
     ],
+    importpath = "k8s.io/kubernetes/cmd/kube-proxy/app",
     library = ":go_default_library",
     deps = [
         "//pkg/api:go_default_library",
